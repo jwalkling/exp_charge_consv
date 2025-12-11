@@ -20,8 +20,42 @@ end
 
 struct Bonds
     lattice::Lattice
+    max_bond::Int
     bond::Vector{Int}  #Bond variables
 end
+
+@inline function in_bounds(index_curr::Int, step::Int, Lx::Int, Ly::Int)
+    # Attempted new index
+    index_next = index_curr + step
+
+    # Global bound check
+    if index_next < 1 || index_next > Lx * Ly
+        return false
+    end
+
+    # --- Extract x,y from flattened coordinate (1-indexed) ---
+    # x runs 1..Lx, y runs 1..Ly
+    x = ((index_curr - 1) % Lx) + 1
+    y = ((index_curr - 1) ÷ Lx) + 1
+
+    # Horizontal moves
+    if step == 1      && x == Lx
+        return false
+    elseif step == -1 && x == 1
+        return false
+    end
+
+    # Vertical moves
+    if step == Lx     && y == Ly
+        return false
+    elseif step == -Lx && y == 1
+        return false
+    end
+
+    return true
+end
+
+
 
 # Function to convert index to coordinate of centre of link
 @inline function index_to_coord(lattice::Lattice, index::Int)
@@ -47,69 +81,93 @@ end
     return sign * step
 end
 
-@inline function allowed_step(δB::Float, bond_config::Bonds, rng::AbstractRNG)
-    #Find all the values that result from adding δB
-
-
-    #Choose a move randomly
-end
-
-@inline function step_index(index_curr::Int, move::Int, Lx::Int, Ly::Int)
-    if index_curr % Lx == 0 && move == 1 #Right edge moving right
-        return index_curr - Lx + 1
-    elseif (index_curr - 1) % Lx == 0 && move == -1 #Left edge moving left
-        return index_curr + Lx - 1
-    elseif index_curr <= Lx && move == -Lx #Bottom edge moving down
-        return index_curr + Lx*(Ly-1)
-    elseif index_curr >= Lx*(Ly-1)+1 && move == Lx #Top edge moving up
-        return index_curr - Lx*(Ly-1)
-    else
-        return index_curr + move
-    end
-end
 
 
 #Function to grab the bond label between two indices.
 #TK need to be careful with this function, can give a wrong bond
 # if indices are not nearest neighbours.
-@inline function bond_between(index_prev::Int, index_curr::Int)
+@inline function bond_label(index_prev::Int, index_curr::Int)
     i = index_prev < index_curr ? index_prev : index_curr
     Δ = index_curr - index_prev
 
     # |Δ| == 1  → vertical → 2i-1
     # |Δ| >  1  → horizontal → 2i
-    return (abs(Δ) == 1) ? (2i - 1) : (2i)
-end
-
-@inline function bond_PBC(index_prev::Int, index_curr::Int, Lx::Int)
-    Δ   = index_curr - index_prev
-    aΔ  = abs(Δ)
-    i_min = index_prev < index_curr ? index_prev : index_curr
-    i_max = index_prev > index_curr ? index_prev : index_curr
-    
-    if aΔ == 1             # x hop (internal)      → use min
-        return 2*i_min - 1, Δ
-    elseif aΔ == Lx        # y hop (internal)      → use min
-        return 2*i_min, Δ
-    #For the PBC cases, return effective delta.
-    elseif aΔ == Lx - 1    # x hop (PBC)           → use max
-        return 2*i_max - 1, -sign(Δ)
-    else                   # y hop (PBC)           → use max
-        return 2*i_max, -sign(Δ)
-    end
+    return (abs(Δ) == 1) ? (2i - 1) : (2i), Δ
 end
 
 #Takes the effective Δ as input (PBC adjusted)
 #Returns value for charge neutrality
 @inline function multiplier(Δ_curr, Δ_prev)
     var=sign(Δ_curr)
-    if abs(Δ_curr) == abs(Δ_prev)
-        return 2.0^var
+    if abs(Δ_curr) != abs(Δ_prev) && var != sign(Δ_prev)
+        return 
     else
-        return -1
+        return 2.0^var
     end
 end
 
+#Return a random allowed move
+@inline function allowed_step_first(δB_firstmove::Float64, bond_config::Bonds, index_curr::Int)
+    Lx = bond_config.lattice.Lx
+    Ly = bond_config.lattice.Ly
+    bonds = bond_config.bond
+
+    steps = [-1, 1, -Lx, Lx]
+    shuffle!(steps)
+
+    for step in steps
+        if !in_bounds(index_curr, step, Lx, Ly)
+            continue
+        end
+
+        index_next = index_curr + step
+        bond = bond_label(index_curr, index_next)[1]
+
+        if abs(bonds[bond] + δB_firstmove) <= bond_config.max_bond &&
+           abs(δB_firstmove) >= 1
+            return step
+        end
+    end
+
+    error("No allowed steps for first worm move")
+end
+
+@inline function allowed_step(δB::Float64, bond_config::Bonds, index_curr::Int, index_prev::Int)
+    Lx      = bond_config.lattice.Lx
+    Δ_prev  = index_curr - index_prev
+    bonds   = bond_config.bond
+    steps   = [-1, 1, -Lx, Lx]
+
+    shuffle!(steps) # Randomise order of steps
+
+    for step in steps # Accept the first valid step
+        # no backtracking
+        if step == -Δ_prev
+            continue
+        end
+
+        # open boundary conditions
+        if !in_bounds(index_curr, step, Lx, bond_config.lattice.Ly)
+            continue
+        end
+
+        # Physical constraint on bond variables
+        index_next = index_curr + step
+        Δ_curr     = step
+        δB_curr    = δB * multiplier(Δ_curr, Δ_prev)
+        bond       = bond_label(index_curr, index_next)[1]
+
+        # Can't exceed max bond, and must be integer.
+        if abs(bonds[bond] + δB_curr) <= bond_config.max_bond && abs(δB_curr) >= 1
+            println("Allowed step: ", step, "\n")
+            println("  from index ", index_curr, " to ", index_next, "\n")
+            println(" bond ", bond, ": current value ", bonds[bond], ", δB_curr=", δB_curr, "\n")
+            return step, bond, δB_curr
+        end
+    end
+
+    error("No allowed steps for (curr=$index_curr, prev=$index_prev)")
+end
 
 function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
     #Count total number of sites
@@ -123,41 +181,40 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
     #Pick a random vertex starting point on the grid
     index_0 = rand(1:Nsites)
 
-    #Pick a direction to move
-    move_0=rand_step(lattice, rng)
-
-    index_curr=step_index(index_0,move_0,Lx,Ly)
-    index_prev=index_0
-
     #Value to change spin by
-    δB_0=1 #TK this can be modified
+    δB_0=2.0 #TK this can be modified
     δB_prev = δB_0
 
-    bond_prev, Δ_eff=bond_PBC(index_curr, index_prev, Lx) #bond label
+    #Pick a direction to move
+    move_0=allowed_step_first(δB_0, bond_config, index_0)
+    println("Initial move: ", move_0, "\n")
+    println("  from index ", index_0, " to ", index_0 + move_0, "\n")
+    index_curr=index_0+move_0
+    index_prev=index_0
+
+    bond_prev, Δmove=bond_label(index_curr, index_prev) #bond label
     bond_config.bond[bond_prev]+=δB_prev
-    Δ_eff_prev=Δ_eff
-    k=0
-    while k < 100#index_curr != index_0
+    Δmove_prev=Δmove
+
+    while index_curr != index_0
         #Pick a new direction to move
-        move=rand_step(lattice, rng) #TK need to fix that we don't bounce back.
-        
+        Δmove, bond_curr, δB_curr=allowed_step(δB_prev, bond_config, index_curr, index_prev)
+
         #Moves with PBCs included
         index_prev=index_curr
-        index_curr=step_index(index_curr,move,Lx,Ly)
+        index_curr=index_curr+Δmove
 
-        bond_curr, Δ_eff_curr=bond_PBC(index_curr, index_prev, Lx) #bond label
-        δB_curr=δB_prev*multiplier(Δ_eff_curr,Δ_eff_prev)
+        print(index_prev, " to ", index_curr, ", δB_curr=", δB_curr, "\n")
         bond_config.bond[bond_curr]+=δB_curr #Update bond variable
 
         #Update variables for next loop
-        Δ_eff_prev=Δ_eff_curr
+        Δmove_prev=Δmove
         δB_prev=δB_curr
-        k+=1
     end
 
-    bond_curr, Δ_eff_curr=bond_PBC(index_curr, index_prev, Lx) #bond label
-    δB_curr=δB_prev*multiplier(Δ_eff_curr,Δ_eff_prev)
-    bond_config.bond[bond_curr]+=δB_curr
+    # bond_curr, Δmove=bond_label(index_curr, index_prev) #bond label
+    # δB_curr=δB_prev*multiplier(Δmove,Δmove_prev)
+    # bond_config.bond[bond_curr]+=δB_curr
 end
 
 
@@ -166,9 +223,159 @@ end
 #-------------------------
 
 lattice=Lattice(10,10)
-bond_config=Bonds(lattice, zeros(Int, 2*lattice.Lx*lattice.Ly))
+N=10 #max_bond value
+bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
 
 MC_T0_loop!(bond_config, MersenneTwister(1234))
+plot_bondsnv(bond_config)
+
+direc= allowed_step_first(1.0, bond_config, 14)
+#bond_config.bond[8]=2
+
+
+
+#-------------------------
+# Plotting
+#-------------------------
+
+"""
+    plot_bonds(bonds; cmap=:RdBu, lw=4)
+
+Plot a Bonds object on a square lattice using colored links.
+
+Arguments
+---------
+bonds::Bonds
+    A struct with fields:
+        - lattice::Lattice (having Lx, Ly)
+        - max_bond::Int     -> symmetric color range [-max_bond, max_bond]
+        - bond::Vector{Int} -> values to display on the links
+
+Keyword Arguments
+-----------------
+cmap  : colormap (default :RdBu)
+lw    : line width of bond segments
+"""
+function vertex_charges(bonds::Bonds)
+    Lx = bonds.lattice.Lx
+    Ly = bonds.lattice.Ly
+    vals = bonds.bond
+    Nsites = Lx * Ly
+
+    q = zeros(Float64, Nsites)
+
+    for i in 1:Nsites
+        x = ((i-1) % Lx) + 1
+        y = ((i-1) ÷ Lx) + 1
+
+        # +x bond (right)
+        σ_px = (x < Lx) ? vals[2i - 1] : 0.0
+
+        # +y bond (up)
+        σ_py = (y < Ly) ? vals[2i] : 0.0
+
+        # -x bond is the right bond of the site to the left
+        if x > 1
+            i_left = i - 1
+            σ_mx = vals[2i_left - 1]
+        else
+            σ_mx = 0.0
+        end
+
+        # -y bond is the up bond of the site below
+        if y > 1
+            i_down = i - Lx
+            σ_my = vals[2i_down]
+        else
+            σ_my = 0.0
+        end
+
+        q[i] = σ_px + σ_py - 2σ_mx - 2σ_my
+    end
+
+    return q
+end
+
+function plot_bondsnv(bonds::Bonds; cmap=:RdBu, lw=4)
+    Lx   = bonds.lattice.Lx
+    Ly   = bonds.lattice.Ly
+    vals = bonds.bond
+    Nmax = bonds.max_bond
+    Nsites = Lx * Ly
+
+    @assert length(vals) ≥ 2Nsites "Bond vector too short for 2 bonds per site."
+
+    # -----------------------
+    # Build bond segments
+    # -----------------------
+    xs = Float64[]
+    ys = Float64[]
+    zs = Float64[]
+
+    for i in 1:Nsites
+        x = ((i-1) % Lx) + 1
+        y = ((i-1) ÷ Lx) + 1
+
+        # Right bond: (x, y) -> (x+1, y)
+        if x < Lx
+            b = vals[2i - 1]
+            append!(xs, (x, x+1, NaN))
+            append!(ys, (y, y,   NaN))
+            append!(zs, (b, b,   NaN))
+        end
+
+        # Up bond: (x, y) -> (x, y+1)
+        if y < Ly
+            b = vals[2i]
+            append!(xs, (x, x,   NaN))
+            append!(ys, (y, y+1, NaN))
+            append!(zs, (b, b,   NaN))
+        end
+    end
+
+    # -----------------------
+    # Base plot: bonds with colorbar
+    # -----------------------
+    p = plot(xs, ys;
+             seriestype   = :path,
+             line_z       = zs,
+             c            = cmap,
+             clim         = (-Nmax, Nmax),
+             linewidth    = lw,
+             aspect_ratio = :equal,
+             xlabel       = "x",
+             ylabel       = "y",
+             colorbar     = true,
+             legend       = false)
+
+    # -----------------------
+    # Vertex positions & charges
+    # -----------------------
+    q = vertex_charges(bonds)
+
+    xs_v = [((i-1) % Lx) + 1 for i in 1:Nsites]
+    ys_v = [((i-1) ÷ Lx) + 1 for i in 1:Nsites]
+
+    # draw vertices as small black dots
+    scatter!(p, xs_v, ys_v;
+             markersize = 4,
+             marker     = :circle,
+             color      = :black)
+
+    # numeric labels for charges at each vertex
+    ann = [ (xs_v[i], ys_v[i], text(string(round(q[i], digits=1)), 8, :black, :center))
+            for i in 1:Nsites ]
+
+    annotate!(p, ann)
+
+    return p
+end
+
+
+
+
+
+
 
 
 
