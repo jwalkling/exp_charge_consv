@@ -11,19 +11,34 @@ using BenchmarkTools
 # Define Lattice Structure
 #-------------------------
 
-#Struct that stores the lattie properties
+#Struct that stores the lattice dimensions
+#TK maybe want to include connectivity in here in the future.
 struct Lattice
     #Dimensions of the lattice
     Lx::Int
     Ly::Int
 end
 
+
+"""
+Define a struct to store the config of the lattice along with properties.
+lattice::Lattice -> Lattice struct defined above that stores dimensions
+max_bond::Int -> bond can take integer values -max_bond, ..., max_bond
+bond::Vector{Int} -> A vector of all the different values on the bonds
+"""
 struct Bonds
     lattice::Lattice
     max_bond::Int
     bond::Vector{Int}  #Bond variables
 end
 
+"""
+function in_bounds: returns a bool, tells you if you step outside the lattice
+index_curr::Int -> starting index
+step::Int -> step size
+Lx, Ly::Int -> Lattice dimensions
+"""
+#TK can maybe make this more efficient by taking lattice as an input.
 @inline function in_bounds(index_curr::Int, step::Int, Lx::Int, Ly::Int)
     # Attempted new index
     index_next = index_curr + step
@@ -74,11 +89,12 @@ end
 
 
 #Efficient random move generation using bools
+#Picks a random move from (-Lx,+Lx,-1,+1) without storing memory
 @inline function rand_step(lat::Lattice, rng::AbstractRNG)
-    axis = rand(rng, Bool)           # false → ±1, true → ±Ly
+    axis = rand(rng, Bool)           # false → ±1, true → ±Lx
     sign = rand(rng, Bool) ? 1 : -1
     step = axis ? lat.Lx : 1
-    return sign * step
+    return sign * step #Returns a random move from (-Lx,+Lx,-1,+1)
 end
 
 
@@ -87,51 +103,65 @@ end
 #TK need to be careful with this function, can give a wrong bond
 # if indices are not nearest neighbours.
 @inline function bond_label(index_prev::Int, index_curr::Int)
-    i = index_prev < index_curr ? index_prev : index_curr
-    Δ = index_curr - index_prev
+    i = index_prev < index_curr ? index_prev : index_curr #Find the smallest index
+    Δ = index_curr - index_prev 
 
     # |Δ| == 1  → vertical → 2i-1
     # |Δ| >  1  → horizontal → 2i
     return (abs(Δ) == 1) ? (2i - 1) : (2i), Δ
 end
 
-#Takes the effective Δ as input (PBC adjusted)
+#Takes the effective Δ as input
 #Returns value for charge neutrality
 @inline function multiplier(Δ_curr, Δ_prev)
     var=sign(Δ_curr)
     if abs(Δ_curr) != abs(Δ_prev) && var != sign(Δ_prev)
-        return 
+        return -1.0 #If we go to partner bond, -1
     else
-        return 2.0^var
+        return 2.0^var #Any other legal move should by x2 or x1/2. 
     end
 end
 
-#Return a random allowed move
+"""
+allowed_step_first -> returns integer step or returns false if no steps allowed
+δB_firstmove::Float64 -> chosen size of first step
+bond_config::Bonds -> bond object 
+index_curr::Int -> starting randomly chosen index
+"""
+
 @inline function allowed_step_first(δB_firstmove::Float64, bond_config::Bonds, index_curr::Int)
     Lx = bond_config.lattice.Lx
     Ly = bond_config.lattice.Ly
     bonds = bond_config.bond
 
+    #TK these lines are one of the most inefficient, need to find a better way
     steps = [-1, 1, -Lx, Lx]
     shuffle!(steps)
 
     for step in steps
-        if !in_bounds(index_curr, step, Lx, Ly)
+        #If the step takes us out of bounds, try next one
+        if !in_bounds(index_curr, step, Lx, Ly) 
             continue
         end
 
         index_next = index_curr + step
-        bond = bond_label(index_curr, index_next)[1]
+        bond = bond_label(index_curr, index_next)[1] #bond value of the move
 
+        #Allow when within the bond bounds set by max_bond and do not add a fractional value
         if abs(bonds[bond] + δB_firstmove) <= bond_config.max_bond &&
            abs(δB_firstmove) >= 1
             return step
         end
     end
 
-    error("No allowed steps for first worm move")
+    #Return just false
+    return false #error("No allowed steps for first worm move")
 end
 
+
+"""
+allowed_step
+"""
 @inline function allowed_step(δB::Float64, bond_config::Bonds, index_curr::Int, index_prev::Int)
     Lx      = bond_config.lattice.Lx
     Δ_prev  = index_curr - index_prev
@@ -141,9 +171,10 @@ end
     shuffle!(steps) # Randomise order of steps
 
     for step in steps # Accept the first valid step
-        # no backtracking
+        # Backtracking allowed to prevent getting stuck
         if step == -Δ_prev
-            continue
+            bond = bond_label(index_curr, index_prev)[1]
+            return step, bond, -δB #need to take away what we added
         end
 
         # open boundary conditions
@@ -154,14 +185,15 @@ end
         # Physical constraint on bond variables
         index_next = index_curr + step
         Δ_curr     = step
+        #print("last increment: ", Δ_prev, ", current increment: ", Δ_curr, "\n")
         δB_curr    = δB * multiplier(Δ_curr, Δ_prev)
         bond       = bond_label(index_curr, index_next)[1]
 
         # Can't exceed max bond, and must be integer.
         if abs(bonds[bond] + δB_curr) <= bond_config.max_bond && abs(δB_curr) >= 1
-            println("Allowed step: ", step, "\n")
-            println("  from index ", index_curr, " to ", index_next, "\n")
-            println(" bond ", bond, ": current value ", bonds[bond], ", δB_curr=", δB_curr, "\n")
+            # println("Allowed step: ", step, "\n")
+            # println("  from index ", index_curr, " to ", index_next, "\n")
+            # println(" bond ", bond, ": current value ", bonds[bond], ", δB_curr=", δB_curr, "\n")
             return step, bond, δB_curr
         end
     end
@@ -177,18 +209,34 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
     Nsites=lattice.Lx*lattice.Ly
     
     #INITIALISE
-    rng = MersenneTwister(1234) #Choose rng
+    #rng = MersenneTwister(1234) #Choose rng
     #Pick a random vertex starting point on the grid
     index_0 = rand(1:Nsites)
 
     #Value to change spin by
-    δB_0=2.0 #TK this can be modified
+    #TK this line is the most critical
+    δB_0=rand(rng, (-1.0,1.0)) #rand(rng, (-1.0,1.0))#rand(rng, (-1.0, 1.0)) #TK this can be modified #rand(rng, (-2.0,-1.0,1.0,2.0))
     δB_prev = δB_0
+    move_0=allowed_step_first(δB_0, bond_config, index_0)
+    if move_0 == false
+        return
+    end
 
     #Pick a direction to move
-    move_0=allowed_step_first(δB_0, bond_config, index_0)
-    println("Initial move: ", move_0, "\n")
-    println("  from index ", index_0, " to ", index_0 + move_0, "\n")
+    # move_0=false
+    # while move_0 == false
+    #      δB_0=rand(rng, (-2.0,-1.0, 1.0, 2.0))
+    #     move_0=allowed_step_first(δB_0, bond_config, index_0)
+    # end
+
+
+    # #Other approach
+    # move_0, δB_0 =allowed_step_first(bond_config, index_0, rng)
+    # δB_prev = Float64(δB_0)
+
+
+    # println("Initial move: ", move_0, "\n")
+    # println("  from index ", index_0, " to ", index_0 + move_0, "\n")
     index_curr=index_0+move_0
     index_prev=index_0
 
@@ -204,17 +252,13 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
         index_prev=index_curr
         index_curr=index_curr+Δmove
 
-        print(index_prev, " to ", index_curr, ", δB_curr=", δB_curr, "\n")
+        #print(index_prev, " to ", index_curr, ", δB_curr=", δB_curr, "\n")
         bond_config.bond[bond_curr]+=δB_curr #Update bond variable
 
         #Update variables for next loop
         Δmove_prev=Δmove
         δB_prev=δB_curr
     end
-
-    # bond_curr, Δmove=bond_label(index_curr, index_prev) #bond label
-    # δB_curr=δB_prev*multiplier(Δmove,Δmove_prev)
-    # bond_config.bond[bond_curr]+=δB_curr
 end
 
 
@@ -222,18 +266,375 @@ end
 # Running the Monte Carlo
 #-------------------------
 
-lattice=Lattice(10,10)
-N=10 #max_bond value
+lattice=Lattice(2,2)
+N=2 #max_bond value
 bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+rng=MersenneTwister(1234)
 
-MC_T0_loop!(bond_config, MersenneTwister(1234))
+MC_T0_loop!(bond_config, rng)
 plot_bondsnv(bond_config)
+
 
 direc= allowed_step_first(1.0, bond_config, 14)
 #bond_config.bond[8]=2
 
+@time MC_T0_loop!(bond_config, MersenneTwister(1234))
+
+#-------------------------
+# Testing ergodicity
+#-------------------------
+#Count up the number of configurations for N=2 on a 2x2 lattice
+lattice=Lattice(2,2)
+N=2 #max_bond value
+bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+
+#Only 3 configs, can store counts in vector which is 3 long
+vector=[0,0,0]
+for i in 1:10^6
+    MC_T0_loop!(bond_config, rng)
+    vector[bond_config.bond[1]+2]+=1 #Configs uniquely determined by value at 1.
+    #Added on +2 since -1 -> +1, etc. for the indices.
+end
 
 
+
+
+#Count up the number of configurations for N=2 on a 3x3 lattice
+lattice=Lattice(3,3)
+N=2 #max_bond value
+bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+
+#Store counts in a dictionary
+dict=Dict{Vector, Int64}()
+
+for i in 1:10^7
+    #bonds_0=copy(bond_config.bond)
+    MC_T0_loop!(bond_config, rng)
+    # if bond_config.bond == bonds_0
+    #     continue
+    # end
+    dict[copy(bond_config.bond)] = get(dict, copy(bond_config.bond), 0) + 1
+end
+
+println(length(keys(dict))) #Number of unique configurations found
+println(collect(values(dict))) #List of unique configurations found
+
+for (i,v) in dict
+    bond_config_dummy=Bonds(lattice, N, i)
+    println("Configuration: ", i, " Count: ", v)
+    p=plot_bondsnv(bond_config_dummy)
+    title!(p, "Count: $v")
+    display(p)
+end
+plot_bondsnv(bond_config)
+
+MC_T0_loop!(bond_config, rng)
+plot_bondsnv(bond_config)
+
+
+
+"""
+Empirical detailed-balance check for uniform target (q=0 manifold).
+
+- Runs burn-in steps.
+- Records directed transition counts between consecutive states.
+- Compares N(C->C') vs N(C'->C) for observed pairs.
+
+Assumes the configuration is bond_config.bond (a Vector-like).
+"""
+function test_detailed_balance!(
+    bond_config,
+    rng::AbstractRNG;
+    burnin::Int = 10_000,
+    nsteps::Int = 200_000,
+    min_pair_count::Int = 50,
+    topk::Int = 20,
+)
+
+    # Stable key for *this* Julia session: hash the contents with a fixed seed.
+    # (Good enough for detecting DB violations in one run.)
+    statekey() = hash(bond_config.bond, UInt(0))
+
+    # Directed transition counts: (k1,k2) -> count
+    trans = Dict{Tuple{UInt64,UInt64}, Int}()
+    visits = Dict{UInt64, Int}()
+
+    # Burn in
+    for _ in 1:burnin
+        MC_T0_loop!(bond_config, rng)
+    end
+
+    # Main sampling
+    k_prev = statekey()
+    visits[k_prev] = get(visits, k_prev, 0) + 1
+
+    for _ in 1:nsteps
+        MC_T0_loop!(bond_config, rng)
+        k_new = statekey()
+
+        trans[(k_prev, k_new)] = get(trans, (k_prev, k_new), 0) + 1
+        visits[k_new] = get(visits, k_new, 0) + 1
+
+        k_prev = k_new
+    end
+
+    # Analyze symmetry: compare N_ab vs N_ba
+    diffs = Vector{Tuple{Int, Int, UInt64, UInt64}}()  # (diff, total, a, b)
+
+    for ((a, b), nab) in trans
+        nba = get(trans, (b, a), 0)
+        total = nab + nba
+        total < min_pair_count && continue
+        push!(diffs, (abs(nab - nba), total, a, b))
+    end
+
+    sort!(diffs; by = x -> (x[1] / max(x[2], 1), x[2]), rev = true)
+
+    println("Unique states visited: ", length(visits))
+    println("Unique directed transitions: ", length(trans))
+    println("Pairs checked (min total count = $min_pair_count): ", length(diffs))
+    println()
+
+    println("Worst symmetry violations (|N_ab - N_ba| / (N_ab+N_ba)):")
+    for i in 1:min(topk, length(diffs))
+        diff, total, a, b = diffs[i]
+        nab = trans[(a, b)]
+        nba = get(trans, (b, a), 0)
+        frac = diff / total
+        println(rpad("[$i]", 4),
+                " frac=", round(frac, digits=4),
+                "  N_ab=", nab,
+                "  N_ba=", nba,
+                "  total=", total,
+                "  keys=(", a, ", ", b, ")")
+    end
+
+    return trans, visits, diffs
+end
+
+# Example usage:
+rng = MersenneTwister(1234)
+trans, visits, diffs = test_detailed_balance!(bond_config, rng; burnin=20_000, nsteps=10_000_000)
+
+
+#-------------------------
+# Testing explicit transition probabilities
+#-------------------------
+state_A=[0,0,0,0,0,0,-1,1,-1,-1,0,-2,2,0,2,0,0,0]
+state_B=[0,0,-1,1,0,-2,-1,1,1,-1,0,-2,2,0,2,0,0,0]
+v0=2
+rng=MersenneTwister(1234)
+function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int)
+    made_moves = Int[]        
+    
+    #Count total number of sites
+    lattice=bond_config.lattice
+    Lx=lattice.Lx
+    Ly=lattice.Ly
+    Nsites=lattice.Lx*lattice.Ly
+    
+    #INITIALISE
+    index_0 = v0 #Use deterministic starting point
+
+    #Value to change spin by
+    #TK this line is the most critical
+    δB_0=1.0 #rand(rng, (-1.0,1.0)) #rand(rng, (-1.0,1.0))#rand(rng, (-1.0, 1.0)) #TK this can be modified #rand(rng, (-2.0,-1.0,1.0,2.0))
+    δB_prev = δB_0
+    move_0=allowed_step_first(δB_0, bond_config, index_0)
+    if move_0 == false
+        return
+    end
+
+    index_curr=index_0+move_0
+
+    index_prev=index_0
+
+    bond_prev, Δmove=bond_label(index_curr, index_prev) #bond label
+    bond_config.bond[bond_prev]+=δB_prev
+    Δmove_prev=Δmove
+    push!(made_moves, move_0)
+    # println("index_0", index_0)
+    while index_curr != index_0
+
+        #Pick a new direction to move
+        Δmove, bond_curr, δB_curr=allowed_step(δB_prev, bond_config, index_curr, index_prev)
+        push!(made_moves, Δmove)
+        # println("index_curr: ", index_curr)
+        # println("Δmove: ", Δmove)
+        #Moves with PBCs included
+        index_prev=index_curr
+        index_curr=index_curr+Δmove
+
+        #print(index_prev, " to ", index_curr, ", δB_curr=", δB_curr, "\n")
+        bond_config.bond[bond_curr]+=δB_curr #Update bond variable
+
+        #Update variables for next loop
+        Δmove_prev=Δmove
+        δB_prev=δB_curr
+    end
+    return made_moves
+end
+
+#Count up the number of transitions to each state when we have a fixed start for each A and B.
+transitions_A=Dict{Vector, Int64}()
+bond_config=Bonds(lattice, N, copy(state_A))
+for i in 1:10^6
+    CTRL_MC_T0_loop!(bond_config, rng, v0)
+    transitions_A[copy(bond_config.bond)] = get(transitions_A, copy(bond_config.bond), 0) + 1
+end
+println(count/10^6)
+
+transitions_B=Dict{Vector, Int64}()
+bond_config=Bonds(lattice, N, copy(state_B))
+for i in 1:10^7
+    CTRL_MC_T0_loop!(bond_config, rng, v0)
+    transitions_B[copy(bond_config.bond)] = get(transitions_B, copy(bond_config.bond), 0) + 1
+end
+
+bond_config=Bonds(lattice, N, copy(state_A))
+plot_bondsnv(bond_config)
+moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
+println(moves)
+plot_bondsnv(bond_config)
+
+count1=0
+count2=0
+count3=0
+count4=0
+for i in 1:10^6
+    bond_config=Bonds(lattice, N, copy(state_A))
+    moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
+    
+    if moves[1] == 3
+        count1+=1
+        if moves[2] == 1
+            count2+=1
+            if moves[3] == -3
+                count3+=1
+                if moves[4] == -1
+                    count4+=1
+                end
+            end
+        end
+    end
+end
+
+#Find the probability of the loop occurring
+println("Results for A -> B transition in single loop flip channel:")
+println("Numerical result, ", count1/10^6*count2/count1*count3/count2*count4/count3)
+println("Analytic result, ", (1/3)*(1/4)*(1/3)*(1/2))
+
+
+count1=0
+count2=0
+count3=0
+count4=0
+for i in 1:10^6
+    bond_config=Bonds(lattice, N, copy(state_B))
+    moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
+    
+    if moves[1] == 1
+        count1+=1
+        if moves[2] == 3
+            count2+=1
+            if moves[3] == -1
+                count3+=1
+                if moves[4] == -3
+                    count4+=1
+                end
+            end
+        end
+    end
+end
+
+#Find the probability of the loop occurring
+println("Results for B -> A transition in single loop flip channel:")
+println("Numerical result, ", count1/10^6*count2/count1*count3/count2*count4/count3)
+println("Analytic result, ", (1/3)*(1/4)*(1/3)*(1/2))
+
+
+# # Dictionary with probabilities for each different initial move from v0
+# # First case is where we just make a step, don't need to resolve the move.
+# bond_config=Bonds(lattice, N, copy(state_A))
+# lattice=bond_config.lattice
+# Lx=lattice.Lx
+# Ly=lattice.Ly
+# Nsites=lattice.Lx*lattice.Ly
+
+# δB_0=1.0
+# δB_prev = δB_0
+
+# Niterations = 100000
+# move_counts = Dict{Int, Int}()
+# n_fail = 0
+
+# for i in 1:Niterations
+#     mv = allowed_step_first(δB_0, bond_config, v0)
+#     if mv === false
+#         n_fail += 1
+#         continue
+#     end
+#     move_counts[mv] = get(move_counts, mv, 0) + 1
+# end
+
+# total_success = sum(values(move_counts))
+
+# # Probabilities relative to all trials, and conditional on successful moves
+# move_prob_total = Dict(k => v / Niterations for (k, v) in move_counts)
+# move_prob_success = total_success > 0 ? Dict(k => v / total_success for (k, v) in move_counts) : Dict{Int, Float64}()
+
+# println("Counts: ", move_counts)
+# println("Prob (per trial): ", move_prob_total)
+# println("Prob (conditional on success): ", move_prob_success)
+# println("Failures: $n_fail / $Niterations")
+
+
+# #Second case make the full move.
+# Niterations = 100000
+# move_counts = Dict{Int, Int}()
+# n_fail = 0
+
+# for i in 1:Niterations
+#     bond_config=Bonds(lattice, N, copy(state_B))
+#     mv = CTRL_MC_T0_loop!(bond_config, rng, v0)
+#     if mv === false
+#         n_fail += 1
+#         continue
+#     end
+#     move_counts[mv] = get(move_counts, mv, 0) + 1
+# end
+
+# total_success = sum(values(move_counts))
+
+# # Probabilities relative to all trials, and conditional on successful moves
+# move_prob_total = Dict(k => v / Niterations for (k, v) in move_counts)
+# move_prob_success = total_success > 0 ? Dict(k => v / total_success for (k, v) in move_counts) : Dict{Int, Float64}()
+
+# println("Counts: ", move_counts)
+# println("Prob (per trial): ", move_prob_total)
+# println("Prob (conditional on success): ", move_prob_success)
+# println("Failures: $n_fail / $Niterations")
+
+
+
+#-------------------------
+# Profiling
+#-------------------------
+using Profile
+rng = MersenneTwister(1234)
+
+# warm-up
+MC_T0_loop!(bond_config, rng)
+plot_bondsnv(bond_config)
+
+Profile.clear()
+@profile begin
+    for _ in 1:10^6  # increase if needed
+        MC_T0_loop!(bond_config, rng)
+    end
+end
+
+Profile.print()
 #-------------------------
 # Plotting
 #-------------------------
@@ -385,7 +786,7 @@ end
 #-------------------------
 
 # Check to see the lattice plots correctly
-lattice_1=Lattice(10,10)
+lattice_1=Lattice(3,3)
 p=plot(legend=false, aspect_ratio=1,title="Lattice Link Centres")
 for index in 1:(lattice_1.Lx*lattice_1.Ly)
     coord = index_to_coord(lattice_1, index)
@@ -395,7 +796,7 @@ end
 display(p)
 
 
-lattice_1 = Lattice(7,7)
+lattice_1 = Lattice(3,3)
 
 p = plot(
     legend = false,
@@ -517,3 +918,43 @@ function test_bonds()
 end
 
 test_bonds()
+
+
+
+#Modified step function here
+
+# @inline function allowed_step_first_mod(bond_config::Bonds, index_curr::Int, rng::AbstractRNG)
+#     Lx = bond_config.lattice.Lx
+#     Ly = bond_config.lattice.Ly
+#     bonds = bond_config.bond
+#     N = bond_config.max_bond
+
+#     steps = (-1, 1, -Lx, Lx)
+
+#     # Build list of all allowed (step, δB) pairs
+#     pairs_step = Int[]
+#     pairs_dB   = Int[]
+#     for step in steps
+#         in_bounds(index_curr, step, Lx, Ly) || continue
+#         index_next = index_curr + step
+#         bond = bond_label(index_curr, index_next)[1]
+
+#         b = bonds[bond]
+
+#         # Allowed integer δB such that |b + δB| <= N and δB != 0
+#         lo = max(-N - b, -N)
+#         hi = min( N - b,  N)
+
+#         # δB in [lo,hi] excluding 0
+#         for δB in lo:hi
+#             δB == 0 && continue
+#             push!(pairs_step, step)
+#             push!(pairs_dB, δB)
+#         end
+#     end
+
+#     isempty(pairs_step) && return (0, 0)
+
+#     k = rand(rng, 1:length(pairs_step))
+#     return pairs_step[k], pairs_dB[k]
+# end
