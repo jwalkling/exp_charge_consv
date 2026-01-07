@@ -1,7 +1,7 @@
-```
+"""
 Library of functions for Exponential Charge Conservation
 Created: 04.12.2025
-```
+"""
 
 using Plots
 using Random
@@ -215,7 +215,7 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
 
     #Value to change spin by
     #TK this line is the most critical
-    δB_0=rand(rng, (-1.0,1.0)) #rand(rng, (-1.0,1.0))#rand(rng, (-1.0, 1.0)) #TK this can be modified #rand(rng, (-2.0,-1.0,1.0,2.0))
+    δB_0=rand(rng, (-2.0,-1.0,1.0,2.0))#1.0#rand(rng, (-1.0,1.0)) #rand(rng, (-1.0,1.0))#rand(rng, (-1.0, 1.0)) #TK this can be modified #rand(rng, (-2.0,-1.0,1.0,2.0))
     δB_prev = δB_0
     move_0=allowed_step_first(δB_0, bond_config, index_0)
     if move_0 == false
@@ -348,16 +348,18 @@ function test_detailed_balance!(
     burnin::Int = 10_000,
     nsteps::Int = 200_000,
     min_pair_count::Int = 50,
-    topk::Int = 20,
-)
+    topk::Int = 20)
 
     # Stable key for *this* Julia session: hash the contents with a fixed seed.
-    # (Good enough for detecting DB violations in one run.)
     statekey() = hash(bond_config.bond, UInt(0))
 
     # Directed transition counts: (k1,k2) -> count
-    trans = Dict{Tuple{UInt64,UInt64}, Int}()
+    trans  = Dict{Tuple{UInt64,UInt64}, Int}()
     visits = Dict{UInt64, Int}()
+
+    # Snapshot of state by key (so we can print the full bond vector later)
+    # Use `copy` so later mutations to bond_config.bond do not overwrite history.
+    states = Dict{UInt64, typeof(bond_config.bond)}()
 
     # Burn in
     for _ in 1:burnin
@@ -367,6 +369,7 @@ function test_detailed_balance!(
     # Main sampling
     k_prev = statekey()
     visits[k_prev] = get(visits, k_prev, 0) + 1
+    states[k_prev] = get(states, k_prev, copy(bond_config.bond))
 
     for _ in 1:nsteps
         MC_T0_loop!(bond_config, rng)
@@ -374,6 +377,11 @@ function test_detailed_balance!(
 
         trans[(k_prev, k_new)] = get(trans, (k_prev, k_new), 0) + 1
         visits[k_new] = get(visits, k_new, 0) + 1
+
+        # Store snapshot the first time we see this key
+        if !haskey(states, k_new)
+            states[k_new] = copy(bond_config.bond)
+        end
 
         k_prev = k_new
     end
@@ -401,28 +409,56 @@ function test_detailed_balance!(
         nab = trans[(a, b)]
         nba = get(trans, (b, a), 0)
         frac = diff / total
+
+        bond_a = states[a]
+        bond_b = states[b]
+
         println(rpad("[$i]", 4),
                 " frac=", round(frac, digits=4),
                 "  N_ab=", nab,
                 "  N_ba=", nba,
-                "  total=", total,
-                "  keys=(", a, ", ", b, ")")
+                "  total=", total)
+
+        # Print full bond vectors (or change to a summary if they are huge)
+        println("   a=", a, "  bond_a=", bond_a)
+        println("   b=", b, "  bond_b=", bond_b)
     end
 
-    return trans, visits, diffs
+    # Return states too, so callers can inspect the full vectors programmatically
+    return trans, visits, diffs, states
 end
+
 
 # Example usage:
 rng = MersenneTwister(1234)
-trans, visits, diffs = test_detailed_balance!(bond_config, rng; burnin=20_000, nsteps=10_000_000)
+trans, visits, diffs = test_detailed_balance!(bond_config, rng; burnin=20_000, nsteps=100_000_000)
 
 
 #-------------------------
 # Testing explicit transition probabilities
 #-------------------------
+
+# Pair that violates detailed balance
+#--------------------------
+state_A=[0, 0, 1, -1, 0, 2, 0, 0, -1, -1, 0, 2, 0, 0, -2, 0, 0, 0] #[0, 0, 1, -1, 0, 2, 0, 0, -1, -1, 0, 2, 0, 0, -2, 0, 0, 0]
+state_B=[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0] #[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0]
+
+# Plot them
+bond_config_A=Bonds(lattice, N, copy(state_A))
+p=plot_bondsnv(bond_config_A)
+display(p)
+bond_config_B=Bonds(lattice, N, copy(state_B))
+p=plot_bondsnv(bond_config_B)
+display(p)
+
+
+
+
+# Pair that obeys detailed balance
+#--------------------------
 state_A=[0,0,0,0,0,0,-1,1,-1,-1,0,-2,2,0,2,0,0,0]
 state_B=[0,0,-1,1,0,-2,-1,1,1,-1,0,-2,2,0,2,0,0,0]
-v0=2
+v0=5
 rng=MersenneTwister(1234)
 function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int)
     made_moves = Int[]        
@@ -438,7 +474,7 @@ function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int)
 
     #Value to change spin by
     #TK this line is the most critical
-    δB_0=1.0 #rand(rng, (-1.0,1.0)) #rand(rng, (-1.0,1.0))#rand(rng, (-1.0, 1.0)) #TK this can be modified #rand(rng, (-2.0,-1.0,1.0,2.0))
+    δB_0=1.0#rand(rng, (-2.0,-1.0,1.0,2.0)) #rand(rng, (-1.0,1.0)) #rand(rng, (-1.0,1.0))#rand(rng, (-1.0, 1.0)) #TK this can be modified #rand(rng, (-2.0,-1.0,1.0,2.0))
     δB_prev = δB_0
     move_0=allowed_step_first(δB_0, bond_config, index_0)
     if move_0 == false
@@ -478,24 +514,25 @@ end
 #Count up the number of transitions to each state when we have a fixed start for each A and B.
 transitions_A=Dict{Vector, Int64}()
 bond_config=Bonds(lattice, N, copy(state_A))
-for i in 1:10^6
+for i in 1:10^7
+    bond_config=Bonds(lattice, N, copy(state_A))
     CTRL_MC_T0_loop!(bond_config, rng, v0)
     transitions_A[copy(bond_config.bond)] = get(transitions_A, copy(bond_config.bond), 0) + 1
 end
-println(count/10^6)
 
 transitions_B=Dict{Vector, Int64}()
 bond_config=Bonds(lattice, N, copy(state_B))
 for i in 1:10^7
+    bond_config=Bonds(lattice, N, copy(state_B))
     CTRL_MC_T0_loop!(bond_config, rng, v0)
     transitions_B[copy(bond_config.bond)] = get(transitions_B, copy(bond_config.bond), 0) + 1
 end
 
-bond_config=Bonds(lattice, N, copy(state_A))
-plot_bondsnv(bond_config)
-moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
-println(moves)
-plot_bondsnv(bond_config)
+# Check the difference in the number of transitions. Should be the same if detailed balance is obeyed.
+println("Transitions from A to B: ", get(transitions_A, state_B, 0))
+println("Transitions from B to A: ", get(transitions_B, state_A, 0))
+
+
 
 count1=0
 count2=0
@@ -513,6 +550,11 @@ for i in 1:10^6
                 count3+=1
                 if moves[4] == -1
                     count4+=1
+                    # println(moves)
+                    # p=plot_bondsnv(bond_config)
+                    # display(p)
+                    # p=plot_bondsnv(Bonds(lattice, N, copy(state_B)))
+                    # display(p)
                 end
             end
         end
@@ -529,17 +571,18 @@ count1=0
 count2=0
 count3=0
 count4=0
+desired_moves = [-3,1,3,-1]#[-1,3,1,-3]#[1, 3, -1, -3]
 for i in 1:10^6
     bond_config=Bonds(lattice, N, copy(state_B))
     moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
     
-    if moves[1] == 1
+    if moves[1] == desired_moves[1]
         count1+=1
-        if moves[2] == 3
+        if moves[2] == desired_moves[2]
             count2+=1
-            if moves[3] == -1
+            if moves[3] == desired_moves[3]
                 count3+=1
-                if moves[4] == -3
+                if moves[4] == desired_moves[4]
                     count4+=1
                 end
             end
