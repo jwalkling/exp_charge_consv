@@ -256,6 +256,142 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
     end
 end
 
+#-------------------------
+# Plotting
+#-------------------------
+
+"""
+    plot_bonds(bonds; cmap=:RdBu, lw=4)
+
+Plot a Bonds object on a square lattice using colored links.
+
+Arguments
+---------
+bonds::Bonds
+    A struct with fields:
+        - lattice::Lattice (having Lx, Ly)
+        - max_bond::Int     -> symmetric color range [-max_bond, max_bond]
+        - bond::Vector{Int} -> values to display on the links
+
+Keyword Arguments
+-----------------
+cmap  : colormap (default :RdBu)
+lw    : line width of bond segments
+"""
+function vertex_charges(bonds::Bonds)
+    Lx = bonds.lattice.Lx
+    Ly = bonds.lattice.Ly
+    vals = bonds.bond
+    Nsites = Lx * Ly
+
+    q = zeros(Float64, Nsites)
+
+    for i in 1:Nsites
+        x = ((i-1) % Lx) + 1
+        y = ((i-1) ÷ Lx) + 1
+
+        # +x bond (right)
+        σ_px = (x < Lx) ? vals[2i - 1] : 0.0
+
+        # +y bond (up)
+        σ_py = (y < Ly) ? vals[2i] : 0.0
+
+        # -x bond is the right bond of the site to the left
+        if x > 1
+            i_left = i - 1
+            σ_mx = vals[2i_left - 1]
+        else
+            σ_mx = 0.0
+        end
+
+        # -y bond is the up bond of the site below
+        if y > 1
+            i_down = i - Lx
+            σ_my = vals[2i_down]
+        else
+            σ_my = 0.0
+        end
+
+        q[i] = σ_px + σ_py - 2σ_mx - 2σ_my
+    end
+
+    return q
+end
+
+function plot_bondsnv(bonds::Bonds; cmap=:RdBu, lw=4)
+    Lx   = bonds.lattice.Lx
+    Ly   = bonds.lattice.Ly
+    vals = bonds.bond
+    Nmax = bonds.max_bond
+    Nsites = Lx * Ly
+
+    @assert length(vals) ≥ 2Nsites "Bond vector too short for 2 bonds per site."
+
+    # -----------------------
+    # Build bond segments
+    # -----------------------
+    xs = Float64[]
+    ys = Float64[]
+    zs = Float64[]
+
+    for i in 1:Nsites
+        x = ((i-1) % Lx) + 1
+        y = ((i-1) ÷ Lx) + 1
+
+        # Right bond: (x, y) -> (x+1, y)
+        if x < Lx
+            b = vals[2i - 1]
+            append!(xs, (x, x+1, NaN))
+            append!(ys, (y, y,   NaN))
+            append!(zs, (b, b,   NaN))
+        end
+
+        # Up bond: (x, y) -> (x, y+1)
+        if y < Ly
+            b = vals[2i]
+            append!(xs, (x, x,   NaN))
+            append!(ys, (y, y+1, NaN))
+            append!(zs, (b, b,   NaN))
+        end
+    end
+
+    # -----------------------
+    # Base plot: bonds with colorbar
+    # -----------------------
+    p = plot(xs, ys;
+             seriestype   = :path,
+             line_z       = zs,
+             c            = cmap,
+             clim         = (-Nmax, Nmax),
+             linewidth    = lw,
+             aspect_ratio = :equal,
+             xlabel       = "x",
+             ylabel       = "y",
+             colorbar     = true,
+             legend       = false)
+
+    # -----------------------
+    # Vertex positions & charges
+    # -----------------------
+    q = vertex_charges(bonds)
+
+    xs_v = [((i-1) % Lx) + 1 for i in 1:Nsites]
+    ys_v = [((i-1) ÷ Lx) + 1 for i in 1:Nsites]
+
+    # draw vertices as small black dots
+    scatter!(p, xs_v, ys_v;
+             markersize = 4,
+             marker     = :circle,
+             color      = :black)
+
+    # numeric labels for charges at each vertex
+    ann = [ (xs_v[i], ys_v[i], text(string(round(q[i], digits=1)), 8, :black, :center))
+            for i in 1:Nsites ]
+
+    annotate!(p, ann)
+
+    return p
+end
 
 
 #-------------------------
@@ -768,142 +904,7 @@ Profile.clear()
 end
 
 Profile.print()
-#-------------------------
-# Plotting
-#-------------------------
 
-"""
-    plot_bonds(bonds; cmap=:RdBu, lw=4)
-
-Plot a Bonds object on a square lattice using colored links.
-
-Arguments
----------
-bonds::Bonds
-    A struct with fields:
-        - lattice::Lattice (having Lx, Ly)
-        - max_bond::Int     -> symmetric color range [-max_bond, max_bond]
-        - bond::Vector{Int} -> values to display on the links
-
-Keyword Arguments
------------------
-cmap  : colormap (default :RdBu)
-lw    : line width of bond segments
-"""
-function vertex_charges(bonds::Bonds)
-    Lx = bonds.lattice.Lx
-    Ly = bonds.lattice.Ly
-    vals = bonds.bond
-    Nsites = Lx * Ly
-
-    q = zeros(Float64, Nsites)
-
-    for i in 1:Nsites
-        x = ((i-1) % Lx) + 1
-        y = ((i-1) ÷ Lx) + 1
-
-        # +x bond (right)
-        σ_px = (x < Lx) ? vals[2i - 1] : 0.0
-
-        # +y bond (up)
-        σ_py = (y < Ly) ? vals[2i] : 0.0
-
-        # -x bond is the right bond of the site to the left
-        if x > 1
-            i_left = i - 1
-            σ_mx = vals[2i_left - 1]
-        else
-            σ_mx = 0.0
-        end
-
-        # -y bond is the up bond of the site below
-        if y > 1
-            i_down = i - Lx
-            σ_my = vals[2i_down]
-        else
-            σ_my = 0.0
-        end
-
-        q[i] = σ_px + σ_py - 2σ_mx - 2σ_my
-    end
-
-    return q
-end
-
-function plot_bondsnv(bonds::Bonds; cmap=:RdBu, lw=4)
-    Lx   = bonds.lattice.Lx
-    Ly   = bonds.lattice.Ly
-    vals = bonds.bond
-    Nmax = bonds.max_bond
-    Nsites = Lx * Ly
-
-    @assert length(vals) ≥ 2Nsites "Bond vector too short for 2 bonds per site."
-
-    # -----------------------
-    # Build bond segments
-    # -----------------------
-    xs = Float64[]
-    ys = Float64[]
-    zs = Float64[]
-
-    for i in 1:Nsites
-        x = ((i-1) % Lx) + 1
-        y = ((i-1) ÷ Lx) + 1
-
-        # Right bond: (x, y) -> (x+1, y)
-        if x < Lx
-            b = vals[2i - 1]
-            append!(xs, (x, x+1, NaN))
-            append!(ys, (y, y,   NaN))
-            append!(zs, (b, b,   NaN))
-        end
-
-        # Up bond: (x, y) -> (x, y+1)
-        if y < Ly
-            b = vals[2i]
-            append!(xs, (x, x,   NaN))
-            append!(ys, (y, y+1, NaN))
-            append!(zs, (b, b,   NaN))
-        end
-    end
-
-    # -----------------------
-    # Base plot: bonds with colorbar
-    # -----------------------
-    p = plot(xs, ys;
-             seriestype   = :path,
-             line_z       = zs,
-             c            = cmap,
-             clim         = (-Nmax, Nmax),
-             linewidth    = lw,
-             aspect_ratio = :equal,
-             xlabel       = "x",
-             ylabel       = "y",
-             colorbar     = true,
-             legend       = false)
-
-    # -----------------------
-    # Vertex positions & charges
-    # -----------------------
-    q = vertex_charges(bonds)
-
-    xs_v = [((i-1) % Lx) + 1 for i in 1:Nsites]
-    ys_v = [((i-1) ÷ Lx) + 1 for i in 1:Nsites]
-
-    # draw vertices as small black dots
-    scatter!(p, xs_v, ys_v;
-             markersize = 4,
-             marker     = :circle,
-             color      = :black)
-
-    # numeric labels for charges at each vertex
-    ann = [ (xs_v[i], ys_v[i], text(string(round(q[i], digits=1)), 8, :black, :center))
-            for i in 1:Nsites ]
-
-    annotate!(p, ann)
-
-    return p
-end
 
 
 
