@@ -157,6 +157,45 @@ index_curr::Int -> starting randomly chosen index
 end
 
 
+@inline function allowed_step_first2(bond_config::Bonds, rng::AbstractRNG, index_curr::Int)
+    Lx    = bond_config.lattice.Lx
+    Ly    = bond_config.lattice.Ly
+    bonds = bond_config.bond
+    maxB  = bond_config.max_bond
+
+    # Pick exactly one direction uniformly (no retries)
+    steps = (-1, 1, -Lx, Lx)
+    step  = rand(rng, steps)
+
+    # Reject whole attempt if out of bounds
+    in_bounds(index_curr, step, Lx, Ly) || return (false,false)
+
+    index_next = index_curr + step
+    bond = bond_label(index_curr, index_next)[1]
+    b    = bonds[bond]
+
+    # Headroom for |b + ΔB| ≤ maxB
+    up   = maxB - b          # max allowed positive ΔB
+    down = maxB + b          # max allowed magnitude for negative ΔB
+
+    # Count allowed powers of two: {1,2,4,...,2^(n-1)} ≤ headroom
+    npos = up   >= 1 ? (8*sizeof(Int) - leading_zeros(Int(up))  ) : 0  # floor(log2(up))+1
+    nneg = down >= 1 ? (8*sizeof(Int) - leading_zeros(Int(down))) : 0  # floor(log2(down))+1
+    ntot = npos + nneg
+    ntot == 0 && return (false,false)
+
+    # Sample uniformly among the allowed signed values
+    r = rand(rng, 1:ntot)
+    δB = if r <= npos
+        1 << (r - 1)                 # +2^(r-1)
+    else
+        -(1 << (r - npos - 1))       # -2^(r-npos-1)
+    end
+
+    return step, Float64(δB)
+end
+
+
 """
 allowed_step
 """
@@ -213,16 +252,20 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
     # Pick a random vertex starting point on the grid
     index_0 = rand(rng, 1:Nsites)
 
-    # Value to change spin by (critical)
-    δB_0    = rand(rng, (-4.0,-2.0, -1.0, 1.0, 2.0,4.0))
-    δB_prev = δB_0
+    # # Value to change spin by
+    # δB_0    = rand(rng, (-4.0,-2.0, -1.0, 1.0, 2.0, 4.0))
+    # δB_prev = δB_0
 
-    # First move (keep your existing logic; you can later refactor similarly)
-    move_0 = allowed_step_first(δB_0, bond_config, index_0)
+    # # First move (keep your existing logic; you can later refactor similarly)
+    # move_0 = allowed_step_first(δB_0, bond_config, index_0)
+    # if move_0 == false
+    #     return
+    # end
+
+    move_0, δB_prev = allowed_step_first2(bond_config, rng, index_0)
     if move_0 == false
         return
     end
-
     index_curr = index_0 + move_0
     index_prev = index_0
 
@@ -446,79 +489,38 @@ println(length(keys(dict))) #Number of unique configurations found
 println(collect(values(dict))) #List of unique configurations found
 
 
-"""
-Shot-noise scaling test for uniformity.
+#Count up the number of configurations for N=4 on a 3x3 lattice
+lattice=Lattice(3,3)
+N=4 #max_bond value
+bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
 
-- mc_step!(bond_config, rng) should perform one MCMC update (your MC_T0_loop!)
-- The dict key is Tuple(bond_config.bond), which is content-based and safe.
-- We analyze CV over the topK most visited states at each checkpoint to keep K fixed.
+#Store counts in a dictionary
+dict=Dict{Vector, Int64}()
 
-Returns:
-    results: Vector of named tuples with fields
-        n, K, mean, std, cv
-    slope: fitted slope of log(cv) vs log(n) (target ~ -0.5)
-"""
-function uniformity_scaling_test!(
-    bond_config,
-    rng;
-    Nmax::Int = 100_000_000,
-    checkpoints::Vector{Int} = unique(round.(Int, 10 .^ range(3, log10(Nmax), length=20))),
-    topK::Int = 200,          # choose based on how many states you typically revisit
-    burnin::Int = 10_000,
-    mc_step! = MC_T0_loop!,
-)
-
-    # Burn-in (optional but recommended)
-    for _ in 1:burnin
-        mc_step!(bond_config, rng)
-    end
-
-    dict = Dict{Tuple, Int}()
-
-    results = NamedTuple[]
-    cp_idx = 1
-    next_cp = checkpoints[cp_idx]
-
-    for i in 1:Nmax
-        mc_step!(bond_config, rng)
-
-        key = Tuple(bond_config.bond)
-        dict[key] = get(dict, key, 0) + 1
-
-        if i == next_cp
-            # Extract counts and take topK (fixed-K analysis)
-            vals = collect(values(dict))
-            sort!(vals; rev=true)
-
-            K = min(topK, length(vals))
-            top = @view vals[1:K]
-
-            μ = mean(top)
-            σ = std(top)
-            cv = σ / μ
-
-            push!(results, (n=i, K=K, mean=μ, std=σ, cv=cv))
-
-            # Advance checkpoint
-            cp_idx += 1
-            if cp_idx > length(checkpoints)
-                break
-            end
-            next_cp = checkpoints[cp_idx]
-        end
-    end
-
-    # Fit slope of log(cv) vs log(n): expected ≈ -0.5 for shot noise
-    xs = log.(Float64[r.n for r in results])
-    ys = log.(Float64[r.cv for r in results])
-
-    x̄ = mean(xs); ȳ = mean(ys)
-    slope = sum((xs .- x̄) .* (ys .- ȳ)) / sum((xs .- x̄).^2)
-
-    return results, slope, dict
+for i in 1:10^8
+    #bonds_0=copy(bond_config.bond)
+    MC_T0_loop!(bond_config, rng)
+    # if bond_config.bond == bonds_0
+    #     continue
+    # end
+    dict[copy(bond_config.bond)] = get(dict, copy(bond_config.bond), 0) + 1
 end
 
+println(length(keys(dict))) #Number of unique configurations found
+println(collect(values(dict))) #List of unique configurations found
 
+results, slope, dict = uniformity_scaling_test!(
+    bond_config, rng;
+    Nmax=100_000_000,
+    topK=200,
+    burnin=10_000,
+    mc_step! =MC_T0_loop!,
+)
+
+println("Fitted slope log(CV) vs log(n): ", slope, "  (shot noise target: -0.5)")
+for r in results
+    println("n=$(r.n)  K=$(r.K)  mean=$(round(r.mean,digits=2))  std=$(round(r.std,digits=2))  CV=$(round(r.cv,digits=4))")
+end
 
 
 
@@ -1271,3 +1273,77 @@ test_bonds()
 #     k = rand(rng, 1:length(pairs_step))
 #     return pairs_step[k], pairs_dB[k]
 # end
+
+
+"""
+Shot-noise scaling test for uniformity.
+
+- mc_step!(bond_config, rng) should perform one MCMC update (your MC_T0_loop!)
+- The dict key is Tuple(bond_config.bond), which is content-based and safe.
+- We analyze CV over the topK most visited states at each checkpoint to keep K fixed.
+
+Returns:
+    results: Vector of named tuples with fields
+        n, K, mean, std, cv
+    slope: fitted slope of log(cv) vs log(n) (target ~ -0.5)
+"""
+function uniformity_scaling_test!(
+    bond_config,
+    rng;
+    Nmax::Int = 100_000_000,
+    checkpoints::Vector{Int} = unique(round.(Int, 10 .^ range(3, log10(Nmax), length=20))),
+    topK::Int = 200,          # choose based on how many states you typically revisit
+    burnin::Int = 10_000,
+    mc_step! = MC_T0_loop!,
+)
+
+    # Burn-in (optional but recommended)
+    for _ in 1:burnin
+        mc_step!(bond_config, rng)
+    end
+
+    dict = Dict{Tuple, Int}()
+
+    results = NamedTuple[]
+    cp_idx = 1
+    next_cp = checkpoints[cp_idx]
+
+    for i in 1:Nmax
+        mc_step!(bond_config, rng)
+
+        key = Tuple(bond_config.bond)
+        dict[key] = get(dict, key, 0) + 1
+
+        if i == next_cp
+            # Extract counts and take topK (fixed-K analysis)
+            vals = collect(values(dict))
+            sort!(vals; rev=true)
+
+            K = min(topK, length(vals))
+            top = @view vals[1:K]
+
+            μ = mean(top)
+            σ = std(top)
+            cv = σ / μ
+
+            push!(results, (n=i, K=K, mean=μ, std=σ, cv=cv))
+
+            # Advance checkpoint
+            cp_idx += 1
+            if cp_idx > length(checkpoints)
+                break
+            end
+            next_cp = checkpoints[cp_idx]
+        end
+    end
+
+    # Fit slope of log(cv) vs log(n): expected ≈ -0.5 for shot noise
+    xs = log.(Float64[r.n for r in results])
+    ys = log.(Float64[r.cv for r in results])
+
+    x̄ = mean(xs); ȳ = mean(ys)
+    slope = sum((xs .- x̄) .* (ys .- ȳ)) / sum((xs .- x̄).^2)
+    p=plot(xs, ys, seriestype=:scatter, label="Data", xlabel="log(N_iterations)", ylabel="log(Error)")
+    display(p)
+    return results, slope, dict
+end
