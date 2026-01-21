@@ -173,32 +173,35 @@ allowed_step
     bonds  = bond_config.bond
 
     # 4 geometric directions (each with probability 1/4)
-    steps = (-1, 1, -Lx, Lx)
-    step  = rand(rng, steps) # Pick a random direction to move
+    steps   = [-1, 1, -Lx, Lx]
+    shuffle!(steps) # Randomise order of steps
 
-    # Out of bounds => self-loop (null move)
-    if !in_bounds(index_curr, step, Lx, Ly)
-        return 0, 0, 0.0 # null move
+    for step in steps # Accept the first valid step
+        # Backtracking allowed to prevent getting stuck
+        if step == -Δ_prev
+            bond = bond_label(index_curr, index_prev)[1]
+            return step, bond, -δB #need to take away what we added
+        end
+
+        # open boundary conditions
+        if !in_bounds(index_curr, step, Lx, bond_config.lattice.Ly)
+            continue
+        end
+
+        # Physical constraint on bond variables
+        index_next = index_curr + step
+        Δ_curr     = step
+        #print("last increment: ", Δ_prev, ", current increment: ", Δ_curr, "\n")
+        δB_curr    = δB * multiplier(Δ_curr, Δ_prev)
+        bond       = bond_label(index_curr, index_next)[1]
+
+        # Can't exceed max bond, and must be integer.
+        if abs(bonds[bond] + δB_curr) <= bond_config.max_bond && abs(δB_curr) >= 1
+            return step, bond, δB_curr
+        end
     end
 
-    # Backtrack direction chosen => valid move (as before)
-    if step == -Δ_prev
-        bond = bond_label(index_curr, index_prev)[1]
-        return step, bond, -δB  # undo what was added
-    end
-
-    # Otherwise attempt the forward move
-    index_next = index_curr + step
-    Δ_curr     = step
-    δB_curr    = δB * multiplier(Δ_curr, Δ_prev)
-    bond       = bond_label(index_curr, index_next)[1]
-
-    # Constraint violation => self-loop (null move)
-    if abs(bonds[bond] + δB_curr) <= bond_config.max_bond && abs(δB_curr) >= 1
-        return step, bond, δB_curr
-    else
-        return 0, 0, 0.0 # null move
-    end
+    error("No allowed steps for (curr=$index_curr, prev=$index_prev)")
 end
 
 function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
@@ -496,8 +499,8 @@ function test_detailed_balance_uniform!(
     min_pair_count::Int = 50,
     topk::Int = 20,
     store_states::Bool = true,
-    mc_step! = MC_T0_loop!
-)
+    mc_step! = MC_T0_loop!)
+    
     # Content-based immutable key (diagnostic-safe; allocates)
     statekey() = Tuple(bond_config.bond)
 
@@ -619,8 +622,8 @@ trans, visits, diffs, states = test_detailed_balance_uniform!(
 #--------------------------
 #state_A=[0, 0, 1, -1, 0, 2, 0, 0, -1, -1, 0, 2, 0, 0, -2, 0, 0, 0] #[0, 0, 1, -1, 0, 2, 0, 0, -1, -1, 0, 2, 0, 0, -2, 0, 0, 0]
 #state_B=[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0] #[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0]
-state_A=[0, 0, 1, -1, 0, 2, 1, -1, -1, 1, 0, 2, -2, 0, -2, 0, 0, 0]
-state_B=[0, 0, 0, 0, 0, 0, -1, 1, -1, -1, 0, -2, 2, 0, 2, 0, 0, 0]
+# state_A=[0, 0, 1, -1, 0, 2, 1, -1, -1, 1, 0, 2, -2, 0, -2, 0, 0, 0]
+# state_B=[0, 0, 0, 0, 0, 0, -1, 1, -1, -1, 0, -2, 2, 0, 2, 0, 0, 0]
 # Plot them
 bond_config_A=Bonds(lattice, N, copy(state_A))
 p=plot_bondsnv(bond_config_A)
@@ -638,8 +641,7 @@ state_A=[0,0,0,0,0,0,-1,1,-1,-1,0,-2,2,0,2,0,0,0]
 state_B=[0,0,-1,1,0,-2,-1,1,1,-1,0,-2,2,0,2,0,0,0]
 v0=2
 rng=MersenneTwister(1234)
-function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int, 
-    δB_0::Float64 = rand(rng, (-2.0, -1.0, 1.0, 2.0)))
+function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int, δB_0::Float64 = rand(rng, (-2.0, -1.0, 1.0, 2.0)))
     made_moves = Int[]
 
     lattice = bond_config.lattice
@@ -711,10 +713,6 @@ bond_config=Bonds(lattice, N, copy(state_A))
 for i in 1:10^6
     bond_config=Bonds(lattice, N, copy(state_A))
     made_moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
-    if bond_config.bond == state_B
-        println("Made moves: ", made_moves)
-        break
-    end
     transitions_A[copy(bond_config.bond)] = get(transitions_A, copy(bond_config.bond), 0) + 1
 end
 
@@ -730,11 +728,11 @@ end
 println("Transitions from A to B: ", get(transitions_A, state_B, 0))
 println("Transitions from B to A: ", get(transitions_B, state_A, 0))
 
-desired_moves=[3,-1,3,1,-3,-1,3,1,1,-3,-3,-1]
+desired_moves=[3,1,-3,-1]#[3,-1,3,1,-3,-1,3,1,1,-3,-3,-1]
 counts=zeros(Int, length(desired_moves))
 for i in 1:10^6
     bond_config=Bonds(lattice, N, copy(state_A))
-    moves=CTRL_MC_T0_loop!(bond_config, rng, v0, 2.0)
+    moves=CTRL_MC_T0_loop!(bond_config, rng, v0, 1.0)
     for k in 1:length(moves)
         if moves[k] == desired_moves[k]
             counts[k]+=1
@@ -750,11 +748,11 @@ end
 
 
 
-desired_moves_rev=-reverse([3,-1,3,1,-3,-1,3,1,1,-3,-3,-1])
-counts=zeros(Int, length(desired_moves))
-for i in 1:10^8
+desired_moves_rev=-reverse(desired_moves)
+counts=zeros(Int, length(desired_moves_rev))
+for i in 1:10^6
     bond_config=Bonds(lattice, N, copy(state_B))
-    moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
+    moves=CTRL_MC_T0_loop!(bond_config, rng, v0, 1.0)
     for k in 1:length(moves)
         if moves[k] == desired_moves_rev[k]
             counts[k]+=1
