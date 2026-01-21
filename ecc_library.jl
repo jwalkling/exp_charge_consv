@@ -214,7 +214,7 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
     index_0 = rand(rng, 1:Nsites)
 
     # Value to change spin by (critical)
-    δB_0    = rand(rng, (-2.0, -1.0, 1.0, 2.0))
+    δB_0    = rand(rng, (-4.0,-2.0, -1.0, 1.0, 2.0,4.0))
     δB_prev = δB_0
 
     # First move (keep your existing logic; you can later refactor similarly)
@@ -433,7 +433,7 @@ bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
 #Store counts in a dictionary
 dict=Dict{Vector, Int64}()
 
-for i in 1:10^7
+for i in 1:10^8
     #bonds_0=copy(bond_config.bond)
     MC_T0_loop!(bond_config, rng)
     # if bond_config.bond == bonds_0
@@ -444,6 +444,83 @@ end
 
 println(length(keys(dict))) #Number of unique configurations found
 println(collect(values(dict))) #List of unique configurations found
+
+
+"""
+Shot-noise scaling test for uniformity.
+
+- mc_step!(bond_config, rng) should perform one MCMC update (your MC_T0_loop!)
+- The dict key is Tuple(bond_config.bond), which is content-based and safe.
+- We analyze CV over the topK most visited states at each checkpoint to keep K fixed.
+
+Returns:
+    results: Vector of named tuples with fields
+        n, K, mean, std, cv
+    slope: fitted slope of log(cv) vs log(n) (target ~ -0.5)
+"""
+function uniformity_scaling_test!(
+    bond_config,
+    rng;
+    Nmax::Int = 100_000_000,
+    checkpoints::Vector{Int} = unique(round.(Int, 10 .^ range(3, log10(Nmax), length=20))),
+    topK::Int = 200,          # choose based on how many states you typically revisit
+    burnin::Int = 10_000,
+    mc_step! = MC_T0_loop!,
+)
+
+    # Burn-in (optional but recommended)
+    for _ in 1:burnin
+        mc_step!(bond_config, rng)
+    end
+
+    dict = Dict{Tuple, Int}()
+
+    results = NamedTuple[]
+    cp_idx = 1
+    next_cp = checkpoints[cp_idx]
+
+    for i in 1:Nmax
+        mc_step!(bond_config, rng)
+
+        key = Tuple(bond_config.bond)
+        dict[key] = get(dict, key, 0) + 1
+
+        if i == next_cp
+            # Extract counts and take topK (fixed-K analysis)
+            vals = collect(values(dict))
+            sort!(vals; rev=true)
+
+            K = min(topK, length(vals))
+            top = @view vals[1:K]
+
+            μ = mean(top)
+            σ = std(top)
+            cv = σ / μ
+
+            push!(results, (n=i, K=K, mean=μ, std=σ, cv=cv))
+
+            # Advance checkpoint
+            cp_idx += 1
+            if cp_idx > length(checkpoints)
+                break
+            end
+            next_cp = checkpoints[cp_idx]
+        end
+    end
+
+    # Fit slope of log(cv) vs log(n): expected ≈ -0.5 for shot noise
+    xs = log.(Float64[r.n for r in results])
+    ys = log.(Float64[r.cv for r in results])
+
+    x̄ = mean(xs); ȳ = mean(ys)
+    slope = sum((xs .- x̄) .* (ys .- ȳ)) / sum((xs .- x̄).^2)
+
+    return results, slope, dict
+end
+
+
+
+
 
 for (i,v) in dict
     bond_config_dummy=Bonds(lattice, N, i)
@@ -499,7 +576,8 @@ function test_detailed_balance_uniform!(
     min_pair_count::Int = 50,
     topk::Int = 20,
     store_states::Bool = true,
-    mc_step! = MC_T0_loop!)
+    mc_step! = MC_T0_loop!
+)
     
     # Content-based immutable key (diagnostic-safe; allocates)
     statekey() = Tuple(bond_config.bond)
@@ -608,7 +686,7 @@ rng = MersenneTwister(1234)
 trans, visits, diffs, states = test_detailed_balance_uniform!(
     bond_config, rng;
     burnin=10_000,
-    nsteps=100_000_000,
+    nsteps=1000_000_000,
     min_pair_count=50,
     topk=20,
     mc_step! = MC_T0_loop!
@@ -637,11 +715,11 @@ display(p)
 
 # Pair that obeys detailed balance
 #--------------------------
-state_A=[0,0,0,0,0,0,-1,1,-1,-1,0,-2,2,0,2,0,0,0]
-state_B=[0,0,-1,1,0,-2,-1,1,1,-1,0,-2,2,0,2,0,0,0]
-v0=2
+state_A=[0, 0, 1, -1, 0, 2, 1, -1, -1, 1, 0, 2, -2, 0, -2, 0, 0, 0] #[0,0,0,0,0,0,-1,1,-1,-1,0,-2,2,0,2,0,0,0]
+state_B=[0, 0, 0, 0, 0, 0, -1, 1, -1, -1, 0, -2, 2, 0, 2, 0, 0, 0]#[0,0,-1,1,0,-2,-1,1,1,-1,0,-2,2,0,2,0,0,0]
+v0=6
 rng=MersenneTwister(1234)
-function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int, δB_0::Float64 = rand(rng, (-2.0, -1.0, 1.0, 2.0)))
+function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int, δB_0::Float64 = rand(rng, (-4.0,-2.0, -1.0, 1.0, 2.0,4.0)))
     made_moves = Int[]
 
     lattice = bond_config.lattice
