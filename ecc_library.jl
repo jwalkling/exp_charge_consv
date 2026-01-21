@@ -226,16 +226,7 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
     bond_prev, Δmove = bond_label(index_curr, index_prev)
     bond_config.bond[bond_prev] += δB_prev
 
-    # Safety valve to avoid infinite looping if constraints trap the worm.
-    # Tune as you like; must be "large".
-    max_attempts = 100_000
-    attempts = 0
-
     while index_curr != index_0
-        attempts += 1
-        if attempts > max_attempts
-            error("MC_T0_loop!: exceeded maximum attempts ($max_attempts) without closing worm loop; possible constraint trapping.")
-        end
 
         # 1/4 over directions; invalid => (0,0,0.0) self-loop
         Δmove, bond_curr, δB_curr = allowed_step(δB_prev, bond_config, rng, index_curr, index_prev)
@@ -466,105 +457,159 @@ plot_bondsnv(bond_config)
 
 
 """
-Empirical detailed-balance check for uniform target (q=0 manifold).
+    test_detailed_balance_uniform!(
+        bond_config,
+        rng::AbstractRNG;
+        burnin::Int = 10_000,
+        nsteps::Int = 200_000,
+        min_pair_count::Int = 50,
+        topk::Int = 20,
+        store_states::Bool = true,
+        mc_step! = MC_T0_loop!
+    )
 
-- Runs burn-in steps.
-- Records directed transition counts between consecutive states.
-- Compares N(C->C') vs N(C'->C) for observed pairs.
+Detailed-balance diagnostic for a Markov chain whose stationary distribution is *uniform*
+over configurations (all visited states are assumed degenerate).
 
-Assumes the configuration is bond_config.bond (a Vector-like).
+Correct DB condition for uniform π is:
+    P(a->b) = P(b->a)
+Empirically:
+    N_ab / visits[a]  ≈  N_ba / visits[b]
+
+This function:
+- keys states by *contents* using Tuple(bond_config.bond)
+- records directed transition counts N_ab and visit counts
+- reports the worst symmetry violations by relative difference in transition probabilities
+
+Returns:
+    trans, visits, diffs, states
+
+where diffs entries are tuples:
+    (relprob, total, a, b, nab, nba, pab, pba, flux_rel)
 """
-function test_detailed_balance!(
+
+function test_detailed_balance_uniform!(
     bond_config,
     rng::AbstractRNG;
     burnin::Int = 10_000,
     nsteps::Int = 200_000,
     min_pair_count::Int = 50,
-    topk::Int = 20)
+    topk::Int = 20,
+    store_states::Bool = true,
+    mc_step! = MC_T0_loop!
+)
+    # Content-based immutable key (diagnostic-safe; allocates)
+    statekey() = Tuple(bond_config.bond)
 
-    # Stable key for *this* Julia session: hash the contents with a fixed seed.
-    statekey() = hash(bond_config.bond, UInt(0))
+    # Directed transition counts: (a,b) -> N_ab
+    trans  = Dict{Tuple{Any,Any}, Int}()
+    visits = Dict{Any, Int}()
 
-    # Directed transition counts: (k1,k2) -> count
-    trans  = Dict{Tuple{UInt64,UInt64}, Int}()
-    visits = Dict{UInt64, Int}()
+    # Optional snapshots for printing
+    states = Dict{Any, Any}()
 
-    # Snapshot of state by key (so we can print the full bond vector later)
-    # Use `copy` so later mutations to bond_config.bond do not overwrite history.
-    states = Dict{UInt64, typeof(bond_config.bond)}()
-
-    # Burn in
+    # Burn-in
     for _ in 1:burnin
-        MC_T0_loop!(bond_config, rng)
+        mc_step!(bond_config, rng)
+    end
+
+    # Initialize
+    a = statekey()
+    visits[a] = get(visits, a, 0) + 1
+    if store_states && !haskey(states, a)
+        states[a] = copy(bond_config.bond)
     end
 
     # Main sampling
-    k_prev = statekey()
-    visits[k_prev] = get(visits, k_prev, 0) + 1
-    states[k_prev] = get(states, k_prev, copy(bond_config.bond))
-
     for _ in 1:nsteps
-        MC_T0_loop!(bond_config, rng)
-        k_new = statekey()
+        mc_step!(bond_config, rng)
+        b = statekey()
 
-        trans[(k_prev, k_new)] = get(trans, (k_prev, k_new), 0) + 1
-        visits[k_new] = get(visits, k_new, 0) + 1
+        trans[(a, b)] = get(trans, (a, b), 0) + 1
+        visits[b] = get(visits, b, 0) + 1
 
-        # Store snapshot the first time we see this key
-        if !haskey(states, k_new)
-            states[k_new] = copy(bond_config.bond)
+        if store_states && !haskey(states, b)
+            states[b] = copy(bond_config.bond)
         end
 
-        k_prev = k_new
+        a = b
     end
 
-    # Analyze symmetry: compare N_ab vs N_ba
-    diffs = Vector{Tuple{Int, Int, UInt64, UInt64}}()  # (diff, total, a, b)
+    # Analyze symmetry on *transition probabilities*:
+    #   pab = N_ab / visits[a]
+    #   pba = N_ba / visits[b]
+    #
+    # Also report a "flux" symmetry check:
+    #   flux_ab = visits[a] * pab = N_ab
+    # so flux symmetry reduces to N_ab ≈ N_ba (but it is noisier / less informative).
+    diffs = Vector{Tuple{Float64, Int, Any, Any, Int, Int, Float64, Float64, Float64}}()
+    # (relprob, total, a, b, nab, nba, pab, pba, flux_rel)
 
-    for ((a, b), nab) in trans
-        nba = get(trans, (b, a), 0)
+    for ((ka, kb), nab) in trans
+        nba = get(trans, (kb, ka), 0)
         total = nab + nba
         total < min_pair_count && continue
-        push!(diffs, (abs(nab - nba), total, a, b))
+
+        va = get(visits, ka, 0)
+        vb = get(visits, kb, 0)
+        (va == 0 || vb == 0) && continue
+
+        pab = nab / va
+        pba = nba / vb
+
+        denom = pab + pba
+        relprob = denom == 0 ? 0.0 : abs(pab - pba) / denom
+
+        # Optional flux symmetry metric (for uniform π, flux is proportional to N_ab)
+        flux_denom = nab + nba
+        flux_rel = flux_denom == 0 ? 0.0 : abs(nab - nba) / flux_denom
+
+        push!(diffs, (relprob, total, ka, kb, nab, nba, pab, pba, flux_rel))
     end
 
-    sort!(diffs; by = x -> (x[1] / max(x[2], 1), x[2]), rev = true)
+    sort!(diffs; by = x -> (x[1], x[2]), rev = true)
 
-    println("Unique states visited: ", length(visits))
-    println("Unique directed transitions: ", length(trans))
-    println("Pairs checked (min total count = $min_pair_count): ", length(diffs))
+    println("Unique states visited:          ", length(visits))
+    println("Unique directed transitions:    ", length(trans))
+    println("Pairs checked (min total = $min_pair_count): ", length(diffs))
     println()
-
-    println("Worst symmetry violations (|N_ab - N_ba| / (N_ab+N_ba)):")
+    println("Worst detailed-balance violations (probability symmetry):")
     for i in 1:min(topk, length(diffs))
-        diff, total, a, b = diffs[i]
-        nab = trans[(a, b)]
-        nba = get(trans, (b, a), 0)
-        frac = diff / total
-
-        bond_a = states[a]
-        bond_b = states[b]
-
+        relprob, total, ka, kb, nab, nba, pab, pba, flux_rel = diffs[i]
         println(rpad("[$i]", 4),
-                " frac=", round(frac, digits=4),
+                " relP=", round(relprob, digits=4),
+                "  pab=", round(pab, digits=6),
+                "  pba=", round(pba, digits=6),
+                "  total=", total,
                 "  N_ab=", nab,
                 "  N_ba=", nba,
-                "  total=", total)
+                "  fluxRel=", round(flux_rel, digits=4))
 
-        # Print full bond vectors (or change to a summary if they are huge)
-        println("   a=", a, "  bond_a=", bond_a)
-        println("   b=", b, "  bond_b=", bond_b)
+        if store_states
+            bond_a = states[ka]
+            bond_b = states[kb]
+            #println("   a_key=", ka)
+            println("   bond_a=", bond_a)
+            #println("   b_key=", kb)
+            println("   bond_b=", bond_b)
+        end
     end
 
-    # Return states too, so callers can inspect the full vectors programmatically
     return trans, visits, diffs, states
 end
 
 
+
 # Example usage:
 rng = MersenneTwister(1234)
-trans, visits, diffs = test_detailed_balance!(bond_config, rng; burnin=20_000, nsteps=10_000_000)
-
+trans, visits, diffs, states = test_detailed_balance_uniform!(
+    bond_config, rng;
+    burnin=10_000,
+    nsteps=100_000_000,
+    min_pair_count=50,
+    topk=20,
+    mc_step! = MC_T0_loop!
+)
 
 #-------------------------
 # Testing explicit transition probabilities
@@ -572,9 +617,10 @@ trans, visits, diffs = test_detailed_balance!(bond_config, rng; burnin=20_000, n
 
 # Pair that violates detailed balance
 #--------------------------
-state_A=[0, 0, 1, -1, 0, 2, 0, 0, -1, -1, 0, 2, 0, 0, -2, 0, 0, 0] #[0, 0, 1, -1, 0, 2, 0, 0, -1, -1, 0, 2, 0, 0, -2, 0, 0, 0]
-state_B=[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0] #[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0]
-
+#state_A=[0, 0, 1, -1, 0, 2, 0, 0, -1, -1, 0, 2, 0, 0, -2, 0, 0, 0] #[0, 0, 1, -1, 0, 2, 0, 0, -1, -1, 0, 2, 0, 0, -2, 0, 0, 0]
+#state_B=[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0] #[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0]
+state_A=[0, 0, 1, -1, 0, 2, 1, -1, -1, 1, 0, 2, -2, 0, -2, 0, 0, 0]
+state_B=[0, 0, 0, 0, 0, 0, -1, 1, -1, -1, 0, -2, 2, 0, 2, 0, 0, 0]
 # Plot them
 bond_config_A=Bonds(lattice, N, copy(state_A))
 p=plot_bondsnv(bond_config_A)
@@ -590,9 +636,10 @@ display(p)
 #--------------------------
 state_A=[0,0,0,0,0,0,-1,1,-1,-1,0,-2,2,0,2,0,0,0]
 state_B=[0,0,-1,1,0,-2,-1,1,1,-1,0,-2,2,0,2,0,0,0]
-v0=5
+v0=2
 rng=MersenneTwister(1234)
-function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int)
+function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int, 
+    δB_0::Float64 = rand(rng, (-2.0, -1.0, 1.0, 2.0)))
     made_moves = Int[]
 
     lattice = bond_config.lattice
@@ -604,7 +651,7 @@ function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int)
     index_0 = v0  # deterministic starting point
 
     # Value to change spin by (controlled)
-    δB_0    = rand(rng, (-2.0, -1.0, 1.0, 2.0))
+    #δB_0    = +2.0#rand(rng, (-2.0, -1.0, 1.0, 2.0))
     δB_prev = δB_0
 
     # First move (still uses your existing first-move logic)
@@ -628,12 +675,14 @@ function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int)
     while index_curr != index_0
         attempts += 1
         if attempts > max_attempts
+            print("Triggered max_moves")
             return made_moves
         end
 
         # New allowed_step: 1/4 directions; invalid => (0,0,0.0) self-loop
         Δmove, bond_curr, δB_curr = allowed_step(δB_prev, bond_config, rng, index_curr, index_prev)
 
+       
         # Record the attempted move. (You can choose to record only nonzero moves.)
         push!(made_moves, Δmove)
 
@@ -641,6 +690,7 @@ function CTRL_MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, v0::Int)
         if Δmove == 0
             continue
         end
+
 
         # Apply move
         index_prev = index_curr
@@ -660,7 +710,11 @@ transitions_A=Dict{Vector, Int64}()
 bond_config=Bonds(lattice, N, copy(state_A))
 for i in 1:10^6
     bond_config=Bonds(lattice, N, copy(state_A))
-    CTRL_MC_T0_loop!(bond_config, rng, v0)
+    made_moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
+    if bond_config.bond == state_B
+        println("Made moves: ", made_moves)
+        break
+    end
     transitions_A[copy(bond_config.bond)] = get(transitions_A, copy(bond_config.bond), 0) + 1
 end
 
@@ -676,66 +730,114 @@ end
 println("Transitions from A to B: ", get(transitions_A, state_B, 0))
 println("Transitions from B to A: ", get(transitions_B, state_A, 0))
 
-
-
-count1=0
-count2=0
-count3=0
-count4=0
-desired_moves = [1,-3,-1,3]#[-1,3,1,-3]#[1, 3, -1, -3]
+desired_moves=[3,-1,3,1,-3,-1,3,1,1,-3,-3,-1]
+counts=zeros(Int, length(desired_moves))
 for i in 1:10^6
     bond_config=Bonds(lattice, N, copy(state_A))
-    moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
-    
-    if moves[1] == desired_moves[1]
-        count1+=1
-        if moves[2] == desired_moves[2]
-            count2+=1
-            if moves[3] == desired_moves[3]
-                count3+=1
-                if moves[4] == desired_moves[4]
-                    count4+=1
-                end
-            end
+    moves=CTRL_MC_T0_loop!(bond_config, rng, v0, 2.0)
+    for k in 1:length(moves)
+        if moves[k] == desired_moves[k]
+            counts[k]+=1
+        else
+            break
         end
     end
 end
 
-#Find the probability of the loop occurring
-println("Results for A -> B transition in single loop flip channel:")
-println("Numerical result, ", count1/10^6*count2/count1*count3/count2*count4/count3)
-println("Analytic result, ", (1/4)^4)
+for k in 1:length(counts)-1
+    println(counts[k+1]/counts[k])
+end
 
 
-count1=0
-count2=0
-count3=0
-count4=0
-desired_moves = [1,-3,-1,3]#[-3,1,3,-1]#[-1,3,1,-3]#[1, 3, -1, -3]
-for i in 1:10^6
+
+desired_moves_rev=-reverse([3,-1,3,1,-3,-1,3,1,1,-3,-3,-1])
+counts=zeros(Int, length(desired_moves))
+for i in 1:10^8
     bond_config=Bonds(lattice, N, copy(state_B))
     moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
-    if length(moves) < 4
-        continue
-    end
-    if moves[1] == desired_moves[1]
-        count1+=1
-        if moves[2] == desired_moves[2]
-            count2+=1
-            if moves[3] == desired_moves[3]
-                count3+=1
-                if moves[4] == desired_moves[4]
-                    count4+=1
-                end
-            end
+    for k in 1:length(moves)
+        if moves[k] == desired_moves_rev[k]
+            counts[k]+=1
+        else
+            break
         end
     end
 end
 
-#Find the probability of the loop occurring
-println("Results for B -> A transition in single loop flip channel:")
-println("Numerical result, ", count1/10^6*count2/count1*count3/count2*count4/count3)
-println("Analytic result, ", (1/4)^4)
+for k in 1:length(counts)-1
+    println(counts[k+1]/counts[k])
+end
+
+
+state_intermediate=[0, 0, 1, 0, 0, 2, 0,0, -1, 1, 0, 2, -2, 0, -2, 0, 0, 0]
+bond_config_int=Bonds(lattice, N, copy(state_intermediate))
+p=plot_bondsnv(bond_config_int)
+display(p)
+count_1=0
+for k in 1:10^5
+    if allowed_step(1.0, bond_config, rng, 7, 4)[1] == 1
+        count_1+=1
+    end
+end
+println("Probability of first move being +1 from v0=2: ", count_1/10^5)
+# count1=0
+# count2=0
+# count3=0
+# count4=0
+# desired_moves = [1,-3,-1,3]#[-1,3,1,-3]#[1, 3, -1, -3]
+# for i in 1:10^6
+#     bond_config=Bonds(lattice, N, copy(state_A))
+#     moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
+    
+#     if moves[1] == desired_moves[1]
+#         count1+=1
+#         if moves[2] == desired_moves[2]
+#             count2+=1
+#             if moves[3] == desired_moves[3]
+#                 count3+=1
+#                 if moves[4] == desired_moves[4]
+#                     count4+=1
+#                 end
+#             end
+#         end
+#     end
+# end
+
+# #Find the probability of the loop occurring
+# println("Results for A -> B transition in single loop flip channel:")
+# println("Numerical result, ", count1/10^6*count2/count1*count3/count2*count4/count3)
+# println("Analytic result, ", (1/4)^4)
+
+
+# count1=0
+# count2=0
+# count3=0
+# count4=0
+# desired_moves = [1,-3,-1,3]#[-3,1,3,-1]#[-1,3,1,-3]#[1, 3, -1, -3]
+# for i in 1:10^6
+#     bond_config=Bonds(lattice, N, copy(state_B))
+#     moves=CTRL_MC_T0_loop!(bond_config, rng, v0)
+#     if length(moves) < 4
+#         continue
+#     end
+#     if moves[1] == desired_moves[1]
+#         count1+=1
+#         if moves[2] == desired_moves[2]
+#             count2+=1
+#             if moves[3] == desired_moves[3]
+#                 count3+=1
+#                 if moves[4] == desired_moves[4]
+#                     count4+=1
+#                 end
+#             end
+#         end
+#     end
+# end
+
+# #Find the probability of the loop occurring
+# println("Results for B -> A transition in single loop flip channel:")
+# println("Numerical result, ", count1/10^6*count2/count1*count3/count2*count4/count3)
+# println("Analytic result, ", (1/4)^4)
 
 
 
@@ -883,6 +985,7 @@ end
 # println("Prob (per trial): ", move_prob_total)
 # println("Prob (conditional on success): ", move_prob_success)
 # println("Failures: $n_fail / $Niterations")
+
 
 
 
