@@ -87,6 +87,8 @@ end
     return (x, y)
 end
 
+#Return the index of a vertex given x and y coordinates
+@inline idx(lat::Lattice, x::Int, y::Int) = (y-1)*lat.Lx + x
 
 #Efficient random move generation using bools
 #Picks a random move from (-Lx,+Lx,-1,+1) without storing memory
@@ -122,6 +124,18 @@ end
     end
 end
 
+#Generates the list of allowed δB_0 values based on max_bond
+@inline function δB_0_tuple(bond_config::Bonds)
+    N = Int(bond_config.max_bond)
+    N < 1 && return ()
+
+    m = 8*sizeof(Int) - leading_zeros(N) - 1   # floor(log2(N))
+    L = m + 2                                  # exponents n = 0..(m+1)
+
+    return (ntuple(i -> -Float64(1 << (i-1)), L)...,
+            ntuple(i ->  Float64(1 << (i-1)), L)...)
+end
+
 """
 allowed_step_first -> returns integer step or returns false if no steps allowed
 δB_firstmove::Float64 -> chosen size of first step
@@ -155,46 +169,6 @@ index_curr::Int -> starting randomly chosen index
     #Return just false
     return false #error("No allowed steps for first worm move")
 end
-
-
-@inline function allowed_step_first2(bond_config::Bonds, rng::AbstractRNG, index_curr::Int)
-    Lx    = bond_config.lattice.Lx
-    Ly    = bond_config.lattice.Ly
-    bonds = bond_config.bond
-    maxB  = bond_config.max_bond
-
-    # Pick exactly one direction uniformly (no retries)
-    steps = (-1, 1, -Lx, Lx)
-    step  = rand(rng, steps)
-
-    # Reject whole attempt if out of bounds
-    in_bounds(index_curr, step, Lx, Ly) || return (false,false)
-
-    index_next = index_curr + step
-    bond = bond_label(index_curr, index_next)[1]
-    b    = bonds[bond]
-
-    # Headroom for |b + ΔB| ≤ maxB
-    up   = maxB - b          # max allowed positive ΔB
-    down = maxB + b          # max allowed magnitude for negative ΔB
-
-    # Count allowed powers of two: {1,2,4,...,2^(n-1)} ≤ headroom
-    npos = up   >= 1 ? (8*sizeof(Int) - leading_zeros(Int(up))  ) : 0  # floor(log2(up))+1
-    nneg = down >= 1 ? (8*sizeof(Int) - leading_zeros(Int(down))) : 0  # floor(log2(down))+1
-    ntot = npos + nneg
-    ntot == 0 && return (false,false)
-
-    # Sample uniformly among the allowed signed values
-    r = rand(rng, 1:ntot)
-    δB = if r <= npos
-        1 << (r - 1)                 # +2^(r-1)
-    else
-        -(1 << (r - npos - 1))       # -2^(r-npos-1)
-    end
-
-    return step, Float64(δB)
-end
-
 
 """
 allowed_step
@@ -243,7 +217,7 @@ allowed_step
     error("No allowed steps for (curr=$index_curr, prev=$index_prev)")
 end
 
-function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
+function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{Float64}})
     lattice = bond_config.lattice
     Lx      = lattice.Lx
     Ly      = lattice.Ly
@@ -252,20 +226,17 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
     # Pick a random vertex starting point on the grid
     index_0 = rand(rng, 1:Nsites)
 
-    # # Value to change spin by
-    # δB_0    = rand(rng, (-4.0,-2.0, -1.0, 1.0, 2.0, 4.0))
-    # δB_prev = δB_0
+    # Value to change spin by
+    δB_0    = rand(rng, δB_0s)
+    δB_prev = δB_0
 
-    # # First move (keep your existing logic; you can later refactor similarly)
-    # move_0 = allowed_step_first(δB_0, bond_config, index_0)
-    # if move_0 == false
-    #     return
-    # end
-
-    move_0, δB_prev = allowed_step_first2(bond_config, rng, index_0)
+    # First move (keep your existing logic; you can later refactor similarly)
+    move_0 = allowed_step_first(δB_0, bond_config, index_0)
     if move_0 == false
         return
     end
+
+
     index_curr = index_0 + move_0
     index_prev = index_0
 
@@ -293,6 +264,452 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG)
     end
 end
 
+#-------------------------
+# Measurements
+#-------------------------
+
+"""
+Spin–spin correlator on links (bonds) at displacement (dx,dy).
+
+- orientation = :both  -> include both horizontal and vertical links
+              = :h     -> only horizontal links (step = +1)
+              = :v     -> only vertical links   (step = +Lx)
+
+- connected=true subtracts mean: <s_i s_j> - <s>^2 (computed over the same link set)
+Returns: (C, npairs)
+"""
+function bond_bond_corr_snapshot(
+    bc::Bonds,
+    dx::Int,
+    dy::Int;
+    orientation::Symbol = :both,
+    connected::Bool = false,
+)
+    lat = bc.lattice
+    Lx, Ly = lat.Lx, lat.Ly
+    bonds = bc.bond
+
+    # choose which link orientations to include
+    steps = orientation === :h    ? (1,) :
+            orientation === :v    ? (Lx,) :
+            (1, Lx)  # :both
+
+    # Optional mean for connected correlator (over same link set in the bulk)
+    mean_s = 0.0
+    nlinks = 0
+
+    if connected
+        for y in 1:Ly, x in 1:Lx
+            i = idx(lat, x, y)
+            for step in steps
+                in_bounds(i, step, Lx, Ly) || continue
+                j = i + step
+                b, _ = bond_label(i, j)
+                mean_s += bonds[b]
+                nlinks += 1
+            end
+        end
+        mean_s /= max(nlinks, 1)
+    end
+
+    # Accumulate correlator
+    sum_ss = 0.0
+    npairs = 0
+
+    for y in 1:Ly, x in 1:Lx
+        i = idx(lat, x, y)
+        x2 = x + dx
+        y2 = y + dy
+        (1 <= x2 <= Lx && 1 <= y2 <= Ly) || continue
+        i2 = idx(lat, x2, y2)
+
+        for step in steps
+            # link at origin exists?
+            in_bounds(i, step, Lx, Ly) || continue
+            j  = i + step
+            b1, _ = bond_label(i, j)
+            s1 = bonds[b1]
+
+            # corresponding link at displaced vertex exists?
+            in_bounds(i2, step, Lx, Ly) || continue
+            j2 = i2 + step
+            b2, _ = bond_label(i2, j2)
+            s2 = bonds[b2]
+
+            if connected
+                sum_ss += (s1 - mean_s) * (s2 - mean_s)
+            else
+                sum_ss += s1 * s2
+            end
+            npairs += 1
+        end
+    end
+
+    C = sum_ss / max(npairs, 1)
+    return C, npairs
+end
+
+"""
+Thermal/MCMC average of bond-bond correlator at (dx,dy).
+
+mc_step! should update bc in-place (e.g., MC_T0_loop!)
+Returns: (C_mean, C_stderr, n_pairs_mean)
+
+Note: stderr here is naive (assumes weak correlations). For rigorous error bars, use blocking.
+"""
+function bond_bond_corr_thermal!(
+    bc::Bonds,
+    rng::AbstractRNG,
+    dx::Int,
+    dy::Int;
+    orientation::Symbol = :both,
+    connected::Bool = false,
+    burnin::Int = 10_000,
+    nsamples::Int = 2_000,
+    thin::Int = 10,
+    mc_step! = MC_T0_loop!,
+)
+    # Allowed starting ΔB values for this bond_config
+    δB_0s = δB_0_tuple(bc)
+
+    # Burn-in
+    for _ in 1:burnin
+        mc_step!(bc, rng, δB_0s)
+    end
+
+    # Sample
+    vals = Vector{Float64}(undef, nsamples)
+    npair_acc = 0.0
+
+    for s in 1:nsamples
+        for _ in 1:thin
+            mc_step!(bc, rng, δB_0s)
+        end
+        Csnap, np = bond_bond_corr_snapshot(
+            bc, dx, dy;
+            orientation = orientation,
+            connected = connected
+        )
+        vals[s] = Csnap
+        npair_acc += np
+    end
+
+    Cmean = mean(vals)
+    Cstderr = std(vals) / sqrt(nsamples)   # naive stderr
+    npairs_mean = npair_acc / nsamples
+
+    return Cmean, Cstderr, npairs_mean
+end
+
+
+
+lattice=Lattice(12,12)
+N=6 #max_bond value
+bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+δB_0s=δB_0_tuple(bond_config)
+rng=MersenneTwister(1234)
+MC_T0_loop!(bond_config, rng, δB_0s)
+lat = bond_config.lattice
+
+#C, dC, np = bond_bond_corr_thermal!(bond_config, rng, 3, 0; orientation=:h, nsamples=100_000, thin=20)
+
+#MC_T0_loop!(bond_config, rng, δB_0s)
+#plot_bondsnv(bond_config)
+
+
+# --- parameters ---
+dmax     = 11                 # for Lx=7, the largest meaningful dx is 6
+nsamples = 10_000_000
+thin     = 20
+
+# --- measure C(dx,0) for dx = 0..dmax ---
+ds  = collect(0:dmax)
+Cs  = similar(Float64[], length(ds))
+dCs = similar(Float64[], length(ds))
+
+for (i, dx) in enumerate(ds)
+    C, dC, np = bond_bond_corr_thermal!(bond_config, rng, dx, 0;
+        orientation = :h,
+        nsamples    = nsamples,
+        thin        = thin,
+        connected   = false,
+    )
+    Cs[i]  = C
+    dCs[i] = dC
+    println("d=$d  C=$(Cs[i]) ± $(dCs[i])   (npairs≈$np)")
+end
+
+y = max.(abs.(Cs), eps(Float64))   # replace 0 with tiny positive number for log-scale
+
+# --- semi-log plot (log y axis) ---
+# If C can be negative at some distances, log-scale won't work directly.
+# Common choice: plot abs(C) on log scale.
+p = plot(ds, log10.(y);
+    marker = :circle,
+    ylims = (-3.5,1),
+    yticks = -3:1:1,
+    xlabel = "Distance dx",
+    ylabel = "log10|C(dx,0)|"
+)
+#Label the yticks and xticks
+#yticks!(p, -3:1:1, string.(10 .^ (-3.0:1.0:1.0)))
+#xticks!(p, 0:1:dmax)
+# Optional error bars (on |C|). For small errors relative to |C| this is fine.
+#plot!(p, ds, y; yerror = dCs, label = "")
+
+display(p)
+
+
+
+"""
+    bond_bond_corr_thermal_grid!(
+        bc::Bonds,
+        rng::AbstractRNG,
+        dmax::Int;
+        orientation::Symbol = :both,
+        connected::Bool = false,
+        burnin::Int = 10_000,
+        nsamples::Int = 2_000,
+        thin::Int = 10,
+        mc_step! = MC_T0_loop!,
+    )
+
+Runs ONE MCMC trajectory and, for each sampled configuration, computes C(dx,dy)
+for all dx,dy ∈ 0:dmax. Returns matrices (dmax+1)×(dmax+1):
+
+    Cmean[dx+1,dy+1],  Cstderr[dx+1,dy+1],  npairs_mean[dx+1,dy+1]
+
+Compatible with mc_step!(bc, rng, δB_0s) where δB_0s = δB_0_tuple(bc).
+"""
+function bond_bond_corr_thermal_grid!(
+    bc::Bonds,
+    rng::AbstractRNG,
+    dmax::Int;
+    orientation::Symbol = :both,
+    connected::Bool = false,
+    burnin::Int = 10_000,
+    nsamples::Int = 2_000,
+    thin::Int = 10,
+    mc_step! = MC_T0_loop!,
+)
+    # Allowed starting ΔB values for this bond_config (per your new API)
+    δB_0s = δB_0_tuple(bc)
+    if isempty(δB_0s)
+        n = dmax + 1
+        return fill(NaN, n, n), fill(NaN, n, n), fill(0.0, n, n)
+    end
+
+    n = dmax + 1
+
+    # Online mean/variance accumulators for each (dx,dy)
+    meanC = zeros(Float64, n, n)
+    M2C   = zeros(Float64, n, n)     # sum of squared deviations
+    npair_acc = zeros(Float64, n, n) # accumulate npairs per snapshot
+
+    # Burn-in
+    for _ in 1:burnin
+        mc_step!(bc, rng, δB_0s)
+    end
+
+    # Sampling loop: one chain, many observables per snapshot
+    for s in 1:nsamples
+        for _ in 1:thin
+            mc_step!(bc, rng, δB_0s)
+        end
+
+        # Compute ALL offsets on this snapshot
+        for dx in 0:dmax
+            for dy in 0:dmax
+                Csnap, np = bond_bond_corr_snapshot(
+                    bc, dx, dy;
+                    orientation = orientation,
+                    connected = connected,
+                )
+
+                i = dx + 1
+                j = dy + 1
+
+                # Welford update for variance per entry
+                δ = Csnap - meanC[i, j]
+                meanC[i, j] += δ / s
+                M2C[i, j]   += δ * (Csnap - meanC[i, j])
+
+                npair_acc[i, j] += np
+            end
+        end
+    end
+
+    # Finalize stderr and mean npairs
+    Cmean = meanC
+    Cstderr = similar(Cmean)
+    if nsamples > 1
+        varC = M2C ./ (nsamples - 1)           # sample variance
+        Cstderr .= sqrt.(varC ./ nsamples)     # naive stderr (same as your scalar version)
+    else
+        Cstderr .= NaN
+    end
+    npairs_mean = npair_acc ./ nsamples
+
+    return Cmean, Cstderr, npairs_mean
+end
+
+"""
+    radialize_corr(Cmean, Cstderr; dmax)
+
+Convert (dx,dy)-grid correlator statistics into radial shells keyed by r = sqrt(dx^2+dy^2).
+
+Returns:
+    rs, Cr, dCr, nr
+where nr is the number of (dx,dy) offsets in each shell.
+"""
+function radialize_corr(Cmean::AbstractMatrix, Cstderr::AbstractMatrix; dmax::Int)
+    shells = Dict{Int, Vector{Tuple{Float64,Float64}}}()  # r2 => [(C, dC), ...]
+
+    for dx in 0:dmax
+        for dy in 0:dmax
+            r2 = dx*dx + dy*dy
+            push!(get!(shells, r2, Tuple{Float64,Float64}[]),
+                  (Cmean[dx+1, dy+1], Cstderr[dx+1, dy+1]))
+        end
+    end
+
+    r2s = sort(collect(keys(shells)))
+    rs  = Float64[]
+    Cr  = Float64[]
+    dCr = Float64[]
+    nr  = Int[]
+
+    for r2 in r2s
+        vals = shells[r2]
+        Cs   = first.(vals)
+        dCs  = last.(vals)
+
+        # Inverse-variance weighted average across offsets in the shell
+        good = all(isfinite.(dCs)) && all(dCs .> 0)
+        if good
+            w = 1.0 ./ (dCs .^ 2)
+            Cbar = sum(w .* Cs) / sum(w)
+            dCbar = sqrt(1.0 / sum(w))
+        else
+            Cbar = mean(Cs)
+            dCbar = std(Cs) / sqrt(length(Cs))
+        end
+
+        push!(rs, sqrt(r2))
+        push!(Cr, Cbar)
+        push!(dCr, dCbar)
+        push!(nr, length(vals))
+    end
+
+    return rs, Cr, dCr, nr
+end
+# --- parameters ---
+dmax     = 7                 # for Lx=7, the largest meaningful dx is 6
+nsamples = 10_00_000
+thin     = 20
+
+Cmean, Cstderr, npairs = bond_bond_corr_thermal_grid!(bond_config, rng, dmax;
+    orientation = :h,
+    nsamples = nsamples,
+    thin = thin,
+    connected = false,
+)
+
+# # Example: recover your old loop output for dy = 0
+# Plot Cmean(dx,0) with error bars (dy = 0 is column 1)
+ds = collect(0:dmax)
+Cs_dx = Cmean[:, 1]
+dCs_dx = Cstderr[:, 1]
+
+p = plot(ds, log10.(abs.(Cs_dx));
+         yerror = dCs_dx,
+         marker = :circle,
+         xlabel = "dx",
+         ylabel = "Cmean(dx, 0)",
+         title  = "Bond–bond correlator C(dx,0)",
+         legend = false)
+display(p)
+
+# Plot C(dx,0) for several N = 2..6 (overlayed)
+lattice = Lattice(20,20)
+dmax = 8                   # radial range used earlier
+ds = collect(0:dmax)
+
+# Sampling parameters (adjust for runtime / precision)
+burnin = 1_000
+nsamples_plot = 1_000
+thin_plot = 20
+
+p = plot(marker = :circle,
+         xlabel = "dx",
+         ylabel = "log10|C(dx,0)|",
+         title = "Bond–bond correlator C(dx,0) for various N",
+         legend = :topright)
+
+for N in 2:6
+    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+    rngN = MersenneTwister(1234 + N)
+
+    # compute grid and take dy=0 column (dy index 1)
+    Cmean, Cstderr, npairs = bond_bond_corr_thermal_grid!(
+        bc, rngN, dmax;
+        orientation = :h,
+        connected   = false,
+        burnin      = burnin,
+        nsamples    = nsamples_plot,
+        thin        = thin_plot,
+        mc_step!    = MC_T0_loop!,
+    )
+
+    Cs_dx = Cmean[:, 1]
+    # avoid log10(0) by adding tiny epsilon
+    plot!(p, ds, log10.(abs.(Cs_dx/N^2) .+ eps(Float64)), label = "N=$N")
+end
+
+display(p)
+
+
+
+function make_plot()
+    lattice = Lattice(20,20)
+    dmax = 8
+    ds = collect(0:dmax)
+
+    burnin = 1_000
+    nsamples_plot = 1_0000
+    thin_plot = 20
+
+    p = plot(marker = :circle,
+             xlabel = "dx",
+             ylabel = "log10|C(dx,0)|",
+             title = "Bond–bond correlator C(dx,0) for various N",
+             legend = :topright)
+
+    for N in 2:6
+        bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+        rngN = MersenneTwister(1234 + N)
+
+        Cmean, Cstderr, npairs = bond_bond_corr_thermal_grid!(
+            bc, rngN, dmax;
+            orientation = :h,
+            connected   = false,
+            burnin      = burnin,
+            nsamples    = nsamples_plot,
+            thin        = thin_plot,
+            mc_step!    = MC_T0_loop!,
+        )
+
+        Cs_dx = @view Cmean[:, 1]
+        plot!(p, ds, log10.(abs.(Cs_dx ./ N^2) .+ eps(Float64)), label = "N=$N")
+    end
+
+    return p
+end
+make_plot();  # warmup
+@time make_plot();
+
+rs, Cr, dCr, nr = radialize_corr(Cmean, Cstderr; dmax=dmax)
+plot(rs,log10.(abs.(Cr)), marker= :circle)
 #-------------------------
 # Plotting
 #-------------------------
@@ -431,6 +848,8 @@ function plot_bondsnv(bonds::Bonds; cmap=:RdBu, lw=4)
 end
 
 
+
+
 #-------------------------
 # Running the Monte Carlo
 #-------------------------
@@ -439,15 +858,15 @@ lattice=Lattice(2,2)
 N=2 #max_bond value
 bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
 rng=MersenneTwister(1234)
-
-MC_T0_loop!(bond_config, rng)
+δB_0s = (-4.0,-2.0, -1.0, 1.0, 2.0,4.0)
+MC_T0_loop!(bond_config, rng, δB_0s)
 plot_bondsnv(bond_config)
 
 
 direc= allowed_step_first(1.0, bond_config, 14)
 #bond_config.bond[8]=2
 
-@time MC_T0_loop!(bond_config, MersenneTwister(1234))
+@time MC_T0_loop!(bond_config, MersenneTwister(1234), δB_0s)
 
 #-------------------------
 # Testing ergodicity
@@ -460,7 +879,7 @@ bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
 #Only 3 configs, can store counts in vector which is 3 long
 vector=[0,0,0]
 for i in 1:10^6
-    MC_T0_loop!(bond_config, rng)
+    MC_T0_loop!(bond_config, rng, δB_0s)
     vector[bond_config.bond[1]+2]+=1 #Configs uniquely determined by value at 1.
     #Added on +2 since -1 -> +1, etc. for the indices.
 end
@@ -472,13 +891,13 @@ end
 lattice=Lattice(3,3)
 N=2 #max_bond value
 bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
-
+δB_0s=δB_0_tuple(bond_config)
 #Store counts in a dictionary
 dict=Dict{Vector, Int64}()
 
 for i in 1:10^8
     #bonds_0=copy(bond_config.bond)
-    MC_T0_loop!(bond_config, rng)
+    MC_T0_loop!(bond_config, rng, δB_0s)
     # if bond_config.bond == bonds_0
     #     continue
     # end
@@ -493,13 +912,13 @@ println(collect(values(dict))) #List of unique configurations found
 lattice=Lattice(3,3)
 N=4 #max_bond value
 bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
-
+δB_0s=δB_0_tuple(bond_config)
 #Store counts in a dictionary
 dict=Dict{Vector, Int64}()
 
 for i in 1:10^8
     #bonds_0=copy(bond_config.bond)
-    MC_T0_loop!(bond_config, rng)
+    MC_T0_loop!(bond_config, rng, δB_0s)
     # if bond_config.bond == bonds_0
     #     continue
     # end
