@@ -12,7 +12,6 @@ using BenchmarkTools
 #-------------------------
 
 #Struct that stores the lattice dimensions
-#TK maybe want to include connectivity in here in the future.
 struct Lattice
     #Dimensions of the lattice
     Lx::Int
@@ -143,7 +142,7 @@ bond_config::Bonds -> bond object
 index_curr::Int -> starting randomly chosen index
 """
 
-@inline function allowed_step_first(δB_firstmove::Float64, bond_config::Bonds, index_curr::Int)
+@inline function allowed_step_first(δB_firstmove::Float64, bond_config::Bonds, index_curr::Int, rng::AbstractRNG)
     Lx = bond_config.lattice.Lx
     Ly = bond_config.lattice.Ly
     bonds = bond_config.bond
@@ -231,7 +230,7 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{
     δB_prev = δB_0
 
     # First move (keep your existing logic; you can later refactor similarly)
-    move_0 = allowed_step_first(δB_0, bond_config, index_0)
+    move_0 = allowed_step_first(δB_0, bond_config, index_0, rng)
     if move_0 == false
         return
     end
@@ -885,7 +884,37 @@ for i in 1:10^6
 end
 
 
+#Count up the number of configurations for N=3 on a LxL lattice
+lattice=Lattice(3,3)
+N=2 #max_bond value
+bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+δB_0s=δB_0_tuple(bond_config)
+#Store counts in a dictionary
+dict=Dict{Vector, Int64}()
 
+for i in 1:10^6
+    #bonds_0=copy(bond_config.bond)
+    MC_T0_loop!(bond_config, rng, δB_0s)
+    # if bond_config.bond == bonds_0
+    #     continue
+    # end
+    dict[copy(bond_config.bond)] = get(dict, copy(bond_config.bond), 0) + 1
+end
+println(length(keys(dict)))
+
+# Plot the first 15 unique configs found
+count=0
+for (i,v) in dict
+    bond_config_dummy=Bonds(lattice, N, i)
+    println("Configuration: ", i, " Count: ", v)
+    p=plot_bondsnv(bond_config_dummy)
+    title!(p, "Count: $v")
+    display(p)
+    count+=1
+    if count>=15
+        break
+    end
+end
 
 #Count up the number of configurations for N=2 on a 3x3 lattice
 lattice=Lattice(3,3)
