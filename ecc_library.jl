@@ -37,15 +37,10 @@ index_curr::Int -> starting index
 step::Int -> step size
 Lx, Ly::Int -> Lattice dimensions
 """
-@inline function in_bounds(index_curr::Int, step::Int, lat::Lattice)
-    #Extract lattice dimensions
-    Lx = lat.Lx
-    Ly = lat.Ly
-    
+#TK can maybe make this more efficient by taking lattice as an input.
+@inline function in_bounds(index_curr::Int, step::Int, Lx::Int, Ly::Int)
     # Attempted new index
     index_next = index_curr + step
-
-
 
     # Global bound check
     if index_next < 1 || index_next > Lx * Ly
@@ -94,20 +89,27 @@ end
 #Return the index of a vertex given x and y coordinates
 @inline idx(lat::Lattice, x::Int, y::Int) = (y-1)*lat.Lx + x
 
+#Efficient random move generation using bools
+#Picks a random move from (-Lx,+Lx,-1,+1) without storing memory
+@inline function rand_step(lat::Lattice, rng::AbstractRNG)
+    axis = rand(rng, Bool)           # false → ±1, true → ±Lx
+    sign = rand(rng, Bool) ? 1 : -1
+    step = axis ? lat.Lx : 1
+    return sign * step #Returns a random move from (-Lx,+Lx,-1,+1)
+end
+
+
 
 #Function to grab the bond label between two indices.
 #TK need to be careful with this function, can give a wrong bond
 # if indices are not nearest neighbours.
+@inline function bond_label(index_prev::Int, index_curr::Int)
+    i = index_prev < index_curr ? index_prev : index_curr #Find the smallest index
+    Δ = index_curr - index_prev 
 
-@inline function bond_label(index_curr::Int, step::Int, Lx::Int)::Int
-    # i = min(index_curr, index_curr + step)
-    i = index_curr + ((step < 0) ? step : 0)
-
-    # x-step iff step == ±1
-    isx = (step == 1) | (step == -1)   # Bool, | is fine here
-
-    # 2i-1 for x-step, else 2i
-    return 2*i - (isx ? 1 : 0)
+    # |Δ| == 1  → vertical → 2i-1
+    # |Δ| >  1  → horizontal → 2i
+    return (abs(Δ) == 1) ? (2i - 1) : (2i), Δ
 end
 
 #Takes the effective Δ as input
@@ -133,38 +135,37 @@ end
 end
 
 """
-allowed_step_first -> returns integer step or returns 0 if no steps allowed
+allowed_step_first -> returns integer step or returns false if no steps allowed
 δB_firstmove::Float64 -> chosen size of first step
 bond_config::Bonds -> bond object 
 index_curr::Int -> starting randomly chosen index
 """
 
 @inline function allowed_step_first(δB_firstmove::Float64, bond_config::Bonds, index_curr::Int, rng::AbstractRNG)
-    lat   = bond_config.lattice
-    Lx    = lat.Lx
+    Lx = bond_config.lattice.Lx
+    Ly = bond_config.lattice.Ly
     bonds = bond_config.bond
 
-    # pick one of 4 directions with 2 random bits (no vector, no allocation)
-    r = rand(rng, UInt32) & 0x3  # 0..3
-    step = ifelse(r == 0x0, -1,
-           ifelse(r == 0x1,  1,
-           ifelse(r == 0x2, -Lx, Lx)))
+    #TK these lines are one of the most inefficient, need to find a better way
+    steps = [-1, 1, -Lx, Lx]
+    step  = rand(rng, steps) # Pick a random direction to move
 
-    # out of bounds → reject
-    if !in_bounds(index_curr, step, lat)
-        return 0
+    #If the step takes us out of bounds, try again next time
+    if !in_bounds(index_curr, step, Lx, Ly) 
+        return false
     end
 
     index_next = index_curr + step
-    bond = bond_label(index_curr, index_next)
+    bond = bond_label(index_curr, index_next)[1] #bond value of the move
 
-    # within bounds and not fractional
-    B_new = bonds[bond] + δB_firstmove
-    if abs(B_new) <= bond_config.max_bond && abs(δB_firstmove) >= 1.0
+    #Allow when within the bond bounds set by max_bond and do not add a fractional value
+    if abs(bonds[bond] + δB_firstmove) <= bond_config.max_bond &&
+        abs(δB_firstmove) >= 1
         return step
     end
 
-    return 0
+    #Return just false
+    return false #error("No allowed steps for first worm move")
 end
 
 """
@@ -177,49 +178,42 @@ allowed_step
     index_curr::Int,
     index_prev::Int,
 )
-    lat   = bond_config.lattice
-    Lx    = lat.Lx
-    bonds = bond_config.bond
-
+    Lx     = bond_config.lattice.Lx
+    Ly     = bond_config.lattice.Ly
     Δ_prev = index_curr - index_prev
+    bonds  = bond_config.bond
 
-    # 4 directions encoded as: 1) -1, 2) +1, 3) -Lx, 4) +Lx
-    # Choose a random starting slot (no allocation, no shuffle)
-    start = rand(rng, UInt32) & 0x3  # 0..3
+    # 4 geometric directions (each with probability 1/4)
+    steps   = [-1, 1, -Lx, Lx]
+    shuffle!(steps) # Randomise order of steps
 
-    @inbounds for t in 0:3
-        k = Int((start + UInt32(t)) & 0x3)  # 0..3
-
-        step = ifelse(k == 0, -1,
-               ifelse(k == 1,  1,
-               ifelse(k == 2, -Lx, Lx)))
-
-        # backtracking allowed
+    for step in steps # Accept the first valid step
+        # Backtracking allowed to prevent getting stuck
         if step == -Δ_prev
-            bond = bond_label(index_curr, index_prev)
-            return step, bond, -δB
+            bond = bond_label(index_curr, index_prev)[1]
+            return step, bond, -δB #need to take away what we added
         end
 
-        # bounds check
-        if !in_bounds(index_curr, step, lat)
+        # open boundary conditions
+        if !in_bounds(index_curr, step, Lx, bond_config.lattice.Ly)
             continue
         end
 
+        # Physical constraint on bond variables
         index_next = index_curr + step
-        δB_curr    = δB * multiplier(step, Δ_prev) #since Δ_curr = step
-        bond       = bond_label(index_curr, index_next)
+        Δ_curr     = step
+        #print("last increment: ", Δ_prev, ", current increment: ", Δ_curr, "\n")
+        δB_curr    = δB * multiplier(Δ_curr, Δ_prev)
+        bond       = bond_label(index_curr, index_next)[1]
 
-        # constraint check
-        B_new = bonds[bond] + δB_curr
-        if abs(B_new) <= bond_config.max_bond && abs(δB_curr) >= 1.0
+        # Can't exceed max bond, and must be integer.
+        if abs(bonds[bond] + δB_curr) <= bond_config.max_bond && abs(δB_curr) >= 1
             return step, bond, δB_curr
         end
     end
 
     error("No allowed steps for (curr=$index_curr, prev=$index_prev)")
 end
-
-
 
 function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{Float64}})
     lattice = bond_config.lattice
@@ -236,7 +230,7 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{
 
     # First move (keep your existing logic; you can later refactor similarly)
     move_0 = allowed_step_first(δB_0, bond_config, index_0, rng)
-    if move_0 == 0 #Break the loop if no allowed first moves
+    if move_0 == false
         return
     end
 
@@ -244,7 +238,7 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{
     index_curr = index_0 + move_0
     index_prev = index_0
 
-    bond_prev = bond_label(index_curr, index_prev)
+    bond_prev, Δmove = bond_label(index_curr, index_prev)
     bond_config.bond[bond_prev] += δB_prev
 
     while index_curr != index_0
@@ -306,7 +300,7 @@ function bond_bond_corr_snapshot(
         for y in 1:Ly, x in 1:Lx
             i = idx(lat, x, y)
             for step in steps
-                in_bounds(i, step, lat) || continue
+                in_bounds(i, step, Lx, Ly) || continue
                 j = i + step
                 b, _ = bond_label(i, j)
                 mean_s += bonds[b]
@@ -329,13 +323,13 @@ function bond_bond_corr_snapshot(
 
         for step in steps
             # link at origin exists?
-            in_bounds(i, step, lat) || continue
+            in_bounds(i, step, Lx, Ly) || continue
             j  = i + step
             b1, _ = bond_label(i, j)
             s1 = bonds[b1]
 
             # corresponding link at displaced vertex exists?
-            in_bounds(i2, step, lat) || continue
+            in_bounds(i2, step, Lx, Ly) || continue
             j2 = i2 + step
             b2, _ = bond_label(i2, j2)
             s2 = bonds[b2]
@@ -887,9 +881,7 @@ for i in 1:10^6
     vector[bond_config.bond[1]+2]+=1 #Configs uniquely determined by value at 1.
     #Added on +2 since -1 -> +1, etc. for the indices.
 end
-
 println(vector)
-
 
 #Count up the number of configurations for N=3 on a LxL lattice
 lattice=Lattice(3,3)
@@ -899,7 +891,7 @@ bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
 #Store counts in a dictionary
 dict=Dict{Vector, Int64}()
 
-for i in 1:10^7
+for i in 1:10^6
     #bonds_0=copy(bond_config.bond)
     MC_T0_loop!(bond_config, rng, δB_0s)
     # if bond_config.bond == bonds_0
@@ -909,6 +901,7 @@ for i in 1:10^7
 end
 println(length(keys(dict)))
 
+@btime MC_T0_loop!($bond_config, $rng, $δB_0s)
 # Plot the first 15 unique configs found
 count=0
 for (i,v) in dict
@@ -939,6 +932,7 @@ for i in 1:10^8
     # end
     dict[copy(bond_config.bond)] = get(dict, copy(bond_config.bond), 0) + 1
 end
+
 
 println(length(keys(dict))) #Number of unique configurations found
 println(collect(values(dict))) #List of unique configurations found
@@ -1526,20 +1520,16 @@ end
 # Profiling
 #-------------------------
 using Profile
-lattice=Lattice(20,20)
-N=10 #max_bond value
-bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
-δB_0s=δB_0_tuple(bond_config)
-rng=MersenneTwister(1234)
+rng = MersenneTwister(1234)
 
 # warm-up
-MC_T0_loop!(bond_config, rng, δB_0s)
+MC_T0_loop!(bond_config, rng)
 plot_bondsnv(bond_config)
 
 Profile.clear()
 @profile begin
-    for _ in 1:10^7 # increase if needed
-        MC_T0_loop!(bond_config, rng,  δB_0s)
+    for _ in 1:10^6  # increase if needed
+        MC_T0_loop!(bond_config, rng)
     end
 end
 
@@ -1694,6 +1684,46 @@ end
 test_bonds()
 
 
+
+#Modified step function here
+
+# @inline function allowed_step_first_mod(bond_config::Bonds, index_curr::Int, rng::AbstractRNG)
+#     Lx = bond_config.lattice.Lx
+#     Ly = bond_config.lattice.Ly
+#     bonds = bond_config.bond
+#     N = bond_config.max_bond
+
+#     steps = (-1, 1, -Lx, Lx)
+
+#     # Build list of all allowed (step, δB) pairs
+#     pairs_step = Int[]
+#     pairs_dB   = Int[]
+#     for step in steps
+#         in_bounds(index_curr, step, Lx, Ly) || continue
+#         index_next = index_curr + step
+#         bond = bond_label(index_curr, index_next)[1]
+
+#         b = bonds[bond]
+
+#         # Allowed integer δB such that |b + δB| <= N and δB != 0
+#         lo = max(-N - b, -N)
+#         hi = min( N - b,  N)
+
+#         # δB in [lo,hi] excluding 0
+#         for δB in lo:hi
+#             δB == 0 && continue
+#             push!(pairs_step, step)
+#             push!(pairs_dB, δB)
+#         end
+#     end
+
+#     isempty(pairs_step) && return (0, 0)
+
+#     k = rand(rng, 1:length(pairs_step))
+#     return pairs_step[k], pairs_dB[k]
+# end
+
+
 """
 Shot-noise scaling test for uniformity.
 
@@ -1766,104 +1796,3 @@ function uniformity_scaling_test!(
     display(p)
     return results, slope, dict
 end
-
-@inline function allowed_step2(
-    δB::Float64,
-    bond_config::Bonds,
-    rng::AbstractRNG,
-    index_curr::Int,
-    index_prev::Int,
-)
-    lat   = bond_config.lattice
-    Lx    = lat.Lx
-    bonds = bond_config.bond
-
-    Δ_prev = index_curr - index_prev
-
-    # 4 directions encoded as: 1) -1, 2) +1, 3) -Lx, 4) +Lx
-    # Choose a random starting slot (no allocation, no shuffle)
-    start = rand(rng, UInt32) & 0x3  # 0..3
-
-    @inbounds for t in 0:3
-        k = Int((start + UInt32(t)) & 0x3)  # 0..3
-
-        step = ifelse(k == 0, -1,
-               ifelse(k == 1,  1,
-               ifelse(k == 2, -Lx, Lx)))
-
-        # backtracking allowed
-        if step == -Δ_prev
-            bond = bond_label(index_curr, index_prev)[1]
-            return step, bond, -δB
-        end
-
-        # bounds check
-        if !in_bounds(index_curr, step, lat)
-            continue
-        end
-
-        index_next = index_curr + step
-        δB_curr    = δB * multiplier(step, Δ_prev) #since Δ_curr = step
-        bond       = bond_label(index_curr, index_next)[1]
-
-        # constraint check
-        B_new = bonds[bond] + δB_curr
-        if abs(B_new) <= bond_config.max_bond && abs(δB_curr) >= 1.0
-            return step, bond, δB_curr
-        end
-    end
-
-    error("No allowed steps for (curr=$index_curr, prev=$index_prev)")
-end
-
-@inline function allowed_step_first2(
-    δB_firstmove::Float64,
-    bond_config::Bonds,
-    index_curr::Int,
-    rng::AbstractRNG,
-)
-    lat   = bond_config.lattice
-    Lx    = lat.Lx
-    bonds = bond_config.bond
-
-    # pick one of 4 directions with 2 random bits (no vector, no allocation)
-    r = rand(rng, UInt32) & 0x3  # 0..3
-    step = ifelse(r == 0x0, -1,
-           ifelse(r == 0x1,  1,
-           ifelse(r == 0x2, -Lx, Lx)))
-
-    # out of bounds → reject
-    if !in_bounds(index_curr, step, lat)
-        return false
-    end
-
-    index_next = index_curr + step
-    bond = bond_label(index_curr, index_next)[1]
-
-    # within bounds and not fractional
-    newval = bonds[bond] + δB_firstmove
-    if abs(newval) <= bond_config.max_bond && abs(δB_firstmove) >= 1.0
-        return step
-    end
-
-    return false
-end
-
-lattice = Lattice(20,20)
-N = 10
-bond_config=Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
-δB=-1.0
-rng=MersenneTwister(1234)
-index_curr=10
-index_prev=9
-
-allowed_step2(δB,
-    bond_config,
-    rng,
-    index_curr,
-    index_prev,
-)
-
-
-@btime allowed_step_first2($δB, $bond_config, $index_curr, $rng)
-@btime allowed_step_first($δB, $bond_config, $index_curr, $rng)
