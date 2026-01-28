@@ -60,8 +60,8 @@ No global bound check; only the geometric edge checks.
 end
 
 # Function to convert index to coordinate of centre of link
-@inline function index_to_coord(lattice::Lattice, index::Int)
-    Ly = lattice.Ly
+@inline function index_to_coord(lat::Lattice, index::Int)
+    Ly = lat.Ly
     q, r = divrem(index - 1, Ly)
     offset = 0.5 * (r & 0x1)
     x = q + 1 + offset
@@ -153,7 +153,7 @@ Backtracking is allowed.
     Δ_prev = index_curr - index_prev
     bonds  = bond_config.bond
 
-    # no allocation, no shuffle!
+    # no allocation
     steps = (-1, 1, -Lx, Lx)
 
     # random starting offset gives unbiased random order
