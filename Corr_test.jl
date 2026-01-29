@@ -35,7 +35,7 @@ plot(average_bond) #see that the average gets smaller for a large number of iter
 #-----------------------------------
 
 L=8
-N=4
+N=2
 lattice = Lattice(L,L)
 bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
 rng = MersenneTwister(1234)
@@ -179,7 +179,7 @@ end
 Cb, dCb = bond_corr_realspace_thermal!(bc, rng, indexc;
     connected=true, burnin=1_000, nsamples=100_000_000, thin=20)
 
-p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cb)); clim=nothing)
+p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cb)); clim=(-4,1.05))
 display(p)
 
 dmax = 6
