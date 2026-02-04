@@ -137,7 +137,8 @@ end
 sizes = [6, 8, 10, 12, 14, 16, 18, 20, 22, 24]
 Cdict  = Dict{Int, Matrix{Float64}}()
 dCdict = Dict{Int, Matrix{Float64}}()
-directory = "Bond_C_10^8/"
+#Data has N=2 fixed with 10^8 iterations
+directory = "../ECC_data/T=0/Bond_C_Ls/"
 
 for size in sizes
     L = size
