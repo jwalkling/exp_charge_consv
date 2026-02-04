@@ -61,7 +61,7 @@ No global bound check; only the geometric edge checks.
 end
 
 # Function to convert index to coordinate of centre of link
-@inline function index_to_coord(lat::Lattice, index::Int)
+@inline function index_to_coord(lat::Lattice, index::Int) #TK this function is wrong, offset by some amount compared to convention.
     Ly = lat.Ly
     q, r = divrem(index - 1, Ly)
     offset = 0.5 * (r & 0x1)
