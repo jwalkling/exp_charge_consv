@@ -25,9 +25,10 @@ max_bond::Int -> bond can take integer values -max_bond, ..., max_bond
 bond::Vector{Int} -> A vector of all the different values on the bonds
 """
 struct Bonds
-    lattice::Lattice
-    max_bond::Int
-    bond::Vector{Int}
+    lattice::Lattice #Lattice struct for dimensions
+    max_bond::Int #Maximum allowed bond value (symmetric range [-max_bond, max_bond])
+    bond::Vector{Int} #Vector to store the values of each bond
+    charges::Vector{Int} #Vector to store the charges at each vertex
 end
 
 """
@@ -69,6 +70,7 @@ end
     y = 1.0 + 0.5 * r
     return (x, y)
 end
+
 
 #Return the index of a vertex given x and y coordinates
 @inline idx(lat::Lattice, x::Int, y::Int) = (y-1)*lat.Lx + x
@@ -233,6 +235,65 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{
 
         bond_config.bond[bond] += δB_curr
         δB_prev = δB_curr
+    end
+end
+
+
+
+@inline charge_factor(Δ::Int) = ifelse(Δ > 0, -2, 1)
+
+
+function MC_T_worm!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{Float64}}, beta::Float64)
+    lat     = bond_config.lattice
+    charges = bond_config.charges
+    Lx      = lat.Lx
+    Ly      = lat.Ly
+    Nsites  = Lx * Ly
+
+    index_0 = rand(rng, 1:Nsites)
+
+    δB_0    = rand(rng, δB_0s)
+    δB_prev = δB_0
+
+    step_0 = allowed_step_first(δB_0, bond_config, index_0, rng)
+    step_prev=step_0
+    if step_0 == 0
+        return
+    end
+
+    # apply first move
+    index_prev = index_0
+    index_curr = index_0 + step_0
+
+    
+
+    bond0 = step_bond(index_prev, step_0)
+    bond_config.bond[bond0] += δB_prev
+
+    # Calculate charges
+    q0 = charges[index_0] + charge_factor(-step_0)*δB_0 # charge left on the initial site
+
+    while index_curr != index_0
+        #Stop with a probability given by delta_j
+        #Energy of the vertex to be left
+        q1 = charges[index_prev] + charge_factor(step_prev)*δB_prev
+        ΔE = q1*q1 + q0*q0 #Energy is square of charges
+        delta = exp(-beta * ΔE) #stopping probability
+        if rand(rng) < delta
+            charges[index_0]    = q0
+            charges[index_prev] = q1
+            return
+        end
+
+        #If no stop, simply sample the next step uniformly
+        step, bond, δB_curr = allowed_step(δB_prev, bond_config, rng, index_curr, index_prev)
+
+        index_prev = index_curr
+        index_curr = index_curr + step
+
+        bond_config.bond[bond] += δB_curr
+        δB_prev = δB_curr
+        step_prev = step
     end
 end
 

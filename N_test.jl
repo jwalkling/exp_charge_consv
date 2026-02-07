@@ -15,7 +15,7 @@ using Colors
 #The data is taken for fixed L=24 and N=2 to see how correlations scale with the iterations
 Ns = [2,6,10,14,20]
 Cdict  = Dict{Int, Matrix{Float64}}()
-directory = "../ECC_data/T=0/Bond_C_Ns/"
+directory = "../ECC_data/T=0/Bond_C_Ns/it=10^9L=20/"
 
 for N in Ns
     Cfile  = joinpath(directory, "Cmat_N$(N).csv")
@@ -74,14 +74,14 @@ for N in Ns
     xlims!(2,11)
     ylims!(-6,0)
 end
-title!(p, "Bulk Pair-Averaged Correlator vs N (L=20, 10^7 iterations)")
+title!(p, "Bulk Pair-Averaged Correlator vs N (L=20, 10^9 iterations)")
 xlabel!(p, "Δr (bond midpoint grid)")
 ylabel!(p, "log10 ⟨C(Δr,0)/N^2⟩_bulk")
 display(p)
-
+savefig(p, joinpath(homedir(), "Downloads", plotname*"_general.png"))
 
 #The labelling means bonds alternate between vert and horizont (A vs. B sublattice)
-plotname="ECC_bulkC_T=0_iterations"
+plotname="ECC_bulkC_T=0_Ns"
 # First plot: A-A sublattice correlations
 p=plot()
 for L in [10, 12, 14, 16, 18, 20, 22, 24]
