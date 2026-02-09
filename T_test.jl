@@ -19,14 +19,33 @@ rng = MersenneTwister(1234)
 
 iterations=10_000
 
-@btime MC_T0_loop!(bc, rng, δB_0s)
+MC_T0_loop!(bc, rng, δB_0s)
 
 plot_bondsnv(bc)
 
 
-MC_T_worm!(bc, rng, δB_0s, 0.01)
+MC_T_worm!(bc, rng, δB_0s, 1.0)
 
 plot_bondsnv(bc)
+
+# Range of betas and study charge frequencies
+betas = [0.1, 0.5, 1.0, 2.0, 5.0]
+iterations = 100_000
+
+charge_dicts = [Dict{Int,Int}() for _ in betas]  # one dict per beta
+
+for (k, beta) in pairs(betas)
+    d = charge_dicts[k]
+    empty!(d)  # optional; ensures clean even if re-running
+
+    for _ in 1:iterations
+        MC_T_worm!(bc, rng, δB_0s, beta)
+
+        for q in bc.charges
+            d[q] = get(d, q, 0) + 1
+        end
+    end
+end
 
 for i in 1:iterations
     MC_T0_loop!(bc, rng, δB_0s)
