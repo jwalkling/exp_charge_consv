@@ -71,6 +71,46 @@ end
     return (x, y)
 end
 
+function vertex_charges(bonds::Bonds)
+    Lx = bonds.lattice.Lx
+    Ly = bonds.lattice.Ly
+    vals = bonds.bond
+    Nsites = Lx * Ly
+
+    q = zeros(Float64, Nsites)
+
+    for i in 1:Nsites
+        x = ((i-1) % Lx) + 1
+        y = ((i-1) ÷ Lx) + 1
+
+        # +x bond (right)
+        σ_px = (x < Lx) ? vals[2i - 1] : 0.0
+
+        # +y bond (up)
+        σ_py = (y < Ly) ? vals[2i] : 0.0
+
+        # -x bond is the right bond of the site to the left
+        if x > 1
+            i_left = i - 1
+            σ_mx = vals[2i_left - 1]
+        else
+            σ_mx = 0.0
+        end
+
+        # -y bond is the up bond of the site below
+        if y > 1
+            i_down = i - Lx
+            σ_my = vals[2i_down]
+        else
+            σ_my = 0.0
+        end
+
+        q[i] = σ_px + σ_py - 2σ_mx - 2σ_my
+    end
+
+    return q
+end
+
 
 #Return the index of a vertex given x and y coordinates
 @inline idx(lat::Lattice, x::Int, y::Int) = (y-1)*lat.Lx + x
@@ -492,45 +532,6 @@ Keyword Arguments
 cmap  : colormap (default :RdBu)
 lw    : line width of bond segments
 """
-function vertex_charges(bonds::Bonds)
-    Lx = bonds.lattice.Lx
-    Ly = bonds.lattice.Ly
-    vals = bonds.bond
-    Nsites = Lx * Ly
-
-    q = zeros(Float64, Nsites)
-
-    for i in 1:Nsites
-        x = ((i-1) % Lx) + 1
-        y = ((i-1) ÷ Lx) + 1
-
-        # +x bond (right)
-        σ_px = (x < Lx) ? vals[2i - 1] : 0.0
-
-        # +y bond (up)
-        σ_py = (y < Ly) ? vals[2i] : 0.0
-
-        # -x bond is the right bond of the site to the left
-        if x > 1
-            i_left = i - 1
-            σ_mx = vals[2i_left - 1]
-        else
-            σ_mx = 0.0
-        end
-
-        # -y bond is the up bond of the site below
-        if y > 1
-            i_down = i - Lx
-            σ_my = vals[2i_down]
-        else
-            σ_my = 0.0
-        end
-
-        q[i] = σ_px + σ_py - 2σ_mx - 2σ_my
-    end
-
-    return q
-end
 
 function plot_bondsnv(bonds::Bonds; cmap=:RdBu, lw=4)
     Lx   = bonds.lattice.Lx
