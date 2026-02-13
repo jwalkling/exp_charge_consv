@@ -311,20 +311,19 @@ function MC_T_worm!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{F
     bond_config.bond[bond0] += δB_prev
 
     # Calculate charges
-    q0 = charges[index_0] + charge_factor(-step_0)*δB_0 # charge left on the initial site
-    #println("q0: ", q0, " at index ", index_0, "\n")
-    #println("Initial move: step ", step_0, " from index ", index_0, " to index ", index_curr, " with δB ", δB_0, "\n")
-    #println("qinitial: ", charges[index_0], " qfinal: ", charges[index_curr], "\n")
+    Emin_sq = -32 * bond_config.max_bond^2
+    qi1 = charges[index_0] + charge_factor(-step_0)*δB_0
     while index_curr != index_0
         #Stop with a probability given by delta_j
         #Energy of the vertex to be left
-        q1 = charges[index_curr] + charge_factor(step_prev)*δB_prev
-        ΔE = q1*q1 + q0*q0 #Energy is square of charges
-        delta = exp(-beta * ΔE) #stopping probability
+        qe0=charges[index_curr]
+        qe1 = qe0 + charge_factor(step_prev)*δB_prev
+        ΔE = qe1*qe1 - qe0*qe0  #Energy is square of charges
+        delta = exp(-beta * (ΔE-Emin_sq)) #stopping probability
         if rand(rng) < delta
-            charges[index_0]    = q0
+            charges[index_0]    = qi1
             #println("bond_config.charges", bond_config.charges)
-            charges[index_curr] = q1
+            charges[index_curr] = qe1
             #println("bond_config.charges", bond_config.charges)
             return
         end
