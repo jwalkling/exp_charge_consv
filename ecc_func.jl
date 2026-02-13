@@ -283,7 +283,7 @@ end
 @inline charge_factor(Δ::Int) = ifelse(Δ > 0, -2, 1)
 
 
-function MC_T_worm!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{Float64}}, beta::Float64)
+function MC_T_worm!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{Float64}}, beta::Float64, Norm::Float64)
     lat     = bond_config.lattice
     charges = bond_config.charges
     Lx      = lat.Lx
@@ -311,7 +311,7 @@ function MC_T_worm!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{F
     bond_config.bond[bond0] += δB_prev
 
     # Calculate charges
-    Emin_sq = -32 * bond_config.max_bond^2
+    #Emin_sq = -32 * bond_config.max_bond^2
     qi1 = charges[index_0] + charge_factor(-step_0)*δB_0
     while index_curr != index_0
         #Stop with a probability given by delta_j
@@ -319,7 +319,7 @@ function MC_T_worm!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{F
         qe0=charges[index_curr]
         qe1 = qe0 + charge_factor(step_prev)*δB_prev
         ΔE = qe1*qe1 - qe0*qe0  #Energy is square of charges
-        delta = exp(-beta * (ΔE-Emin_sq)) #stopping probability
+        delta = exp(-beta * (ΔE))/Norm#-Emin_sq)) #stopping probability #Norm*
         if rand(rng) < delta
             charges[index_0]    = qi1
             #println("bond_config.charges", bond_config.charges)

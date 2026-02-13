@@ -24,7 +24,7 @@ iterations=10_000
 plot_bondsnv(bc)
 
 
-MC_T_worm!(bc, rng, δB_0s, 1.0)
+MC_T_worm!(bc, rng, δB_0s, 1.0, 10^8.0)
 MC_T_worm!(bc, rng, δB_0s, 0.1)
 plot_bondsnv(bc)
 
@@ -41,7 +41,7 @@ for (k, beta) in pairs(betas)
     p=plot_bondsnv(bc)
     display(p)
     for _ in 1:iterations
-        MC_T_worm!(bc, rng, δB_0s, beta)
+        MC_T_worm!(bc, rng, δB_0s, beta, 10^6.0)
 
         for q in bc.charges
             d[q] = get(d, q, 0) + 1
@@ -83,14 +83,14 @@ bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.L
 rng = MersenneTwister()#MersenneTwister(1234)
 δB_0s=δB_0_tuple(bc)
 
-beta=0.001#log(4)/5#log(4)/5
+beta=0.01#log(4)/5#log(4)/5
 iterations=10^8
 #Store counts in a dictionary
 dict=Dict{Vector, Int64}()
 
 for i in 1:iterations
     #bonds_0=copy(bond_config.bond)
-    MC_T_worm!(bc, rng, δB_0s, beta)
+    MC_T_worm!(bc, rng, δB_0s, beta, exp(beta*75))
     # if bond_config.bond == bonds_0
     #     continue
     # end
@@ -106,6 +106,11 @@ for (i, bond) in enumerate(bonds)
     energies[i] = sum(vertex_charges(bc).^2)
 end
 
+
+p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="Log Frequency (normalized)", legend=false)
+plot!(p2,energies, energies, c=:red, label="E=ΔF line")
+
+
 p = scatter(
     counts,
     marker_z = energies,        # color by energy
@@ -118,7 +123,7 @@ p = scatter(
     legend = false,
 )
 
-ylims!(p, maximum(counts) * 0.8, maximum(counts) * 1.1)
+ylims!(p, maximum(counts) * 0.01, maximum(counts) * 1.1)
 display(p)
 
 #plot of the calculated energies vs. estimated energy from frequency of appearance
@@ -126,6 +131,9 @@ p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstr
 plot!(p2,energies, energies, c=:red, label="E=ΔF line")
 title!(p2, "Actual Energy vs. Estimated Energy beta=$beta")
 display(p2)
+
+
+
 
 plot_bondsnv(bc)
 
@@ -338,4 +346,102 @@ function count_AB_transitions(
     B_to_A = get(transitions_B, key_A, 0)
 
     return return_dicts ? (A_to_B, B_to_A, transitions_A, transitions_B) : (A_to_B, B_to_A)
+end
+
+
+
+
+function MC_T_typicalE!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{Float64}}, beta::Float64, Norm::Float64)
+    lat     = bond_config.lattice
+    charges = bond_config.charges
+    Lx      = lat.Lx
+    Ly      = lat.Ly
+    Nsites  = Lx * Ly
+
+    index_0 = rand(rng, 1:Nsites)
+
+    δB_0    = rand(rng, δB_0s)
+    δB_prev = δB_0
+
+    step_0 = allowed_step_first(δB_0, bond_config, index_0, rng)
+    step_prev=step_0
+    if step_0 == 0
+        return (false, 0.0)
+    end
+
+    # apply first move
+    index_prev = index_0
+    index_curr = index_0 + step_0
+
+    
+
+    bond0 = step_bond(index_prev, step_0)
+    bond_config.bond[bond0] += δB_prev
+
+    # Calculate charges
+    #Emin_sq = -32 * bond_config.max_bond^2
+    qi1 = charges[index_0] + charge_factor(-step_0)*δB_0
+    while index_curr != index_0
+        #Stop with a probability given by delta_j
+        #Energy of the vertex to be left
+        qe0=charges[index_curr]
+        qe1 = qe0 + charge_factor(step_prev)*δB_prev
+        ΔE = qe1*qe1 - qe0*qe0  #Energy is square of charges
+        delta = exp(-beta * (ΔE))/Norm#-Emin_sq)) #stopping probability #Norm*
+        if rand(rng) < delta
+            charges[index_0]    = qi1
+            #println("bond_config.charges", bond_config.charges)
+            charges[index_curr] = qe1
+            #println("bond_config.charges", bond_config.charges)
+            # println("triggered")
+            # println("ΔE: ", ΔE)
+            return (true, ΔE)
+        end
+
+        #If no stop, simply sample the next step uniformly
+        step, bond, δB_curr = allowed_step(δB_prev, bond_config, rng, index_curr, index_prev)
+
+        index_prev = index_curr
+        index_curr = index_curr + step
+
+        bond_config.bond[bond] += δB_curr
+        δB_prev = δB_curr
+        step_prev = step
+    end
+    return (true, 0.0)
+end
+
+L=2
+N=2
+lattice = Lattice(L,L)
+
+rng = MersenneTwister()#MersenneTwister(1234)
+δB_0s=δB_0_tuple(bc)
+
+betas=[0.00001,0.0001,0.001,0.01]
+for beta in betas
+    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly)) #Initialize charges to zero
+    #beta=0.01#log(4)/5#log(4)/5
+    iterations=10^6
+    #Store counts in a dictionary
+    dict=Dict{Vector, Int64}()
+
+    energies = []
+
+    for i in 1:iterations
+        #bonds_0=copy(bond_config.bond)
+        vals= MC_T_typicalE!(bc, rng, δB_0s, beta, exp(beta*32*N^2))
+        if vals[1] == false
+            continue
+        end
+        push!(energies, vals[2])
+        # if bond_config.bond == bonds_0
+        #     continue
+        # end
+        dict[copy(bc.bond)] = get(dict, copy(bc.bond), 0) + 1
+    end
+    #Find the energies
+
+    p=histogram(energies, nbins=50, xlabel="Energy Change ΔE", ylabel="Frequency", title="Histogram of Energy Changes at beta=$beta")
+    display(p)
 end
