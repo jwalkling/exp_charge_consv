@@ -9,72 +9,6 @@ using CSV
 using Printf
 using Colors
 
-
-L=3
-N=2
-lattice = Lattice(L,L)
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly)) #Initialize charges to zero
-rng = MersenneTwister(1234)
-δB_0s=δB_0_tuple(bc)
-
-iterations=10_000
-
-@btime MC_T0_loop!(bc, rng, δB_0s)
-
-plot_bondsnv(bc)
-
-
-MC_T_worm!(bc, rng, δB_0s, 1.0, 10^8.0)
-MC_T_worm!(bc, rng, δB_0s, 0.1)
-plot_bondsnv(bc)
-
-# Range of betas and study charge frequencies
-betas = [0.001,0.01, 0.1, 1.0]
-iterations = 1_000_000
-
-charge_dicts = [Dict{Int,Int}() for _ in betas]  # one dict per beta
-
-for (k, beta) in pairs(betas)
-    #bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
-    d = charge_dicts[k]
-    empty!(d)  # optional; ensures clean even if re-running
-    p=plot_bondsnv(bc)
-    display(p)
-    for _ in 1:iterations
-        MC_T_worm!(bc, rng, δB_0s, beta, 10^6.0)
-
-        for q in bc.charges
-            d[q] = get(d, q, 0) + 1
-        end
-    end
-end
-
-
-# Single beta and study ergodicity
-L=3
-N=2
-lattice = Lattice(L,L)
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly)) #Initialize charges to zero
-rng = MersenneTwister()
-δB_0s=δB_0_tuple(bc)
-
-beta=1.0
-#Store counts in a dictionary
-dict=Dict{Vector, Int64}()
-
-for i in 1:10^5
-    #bonds_0=copy(bond_config.bond)
-     MC_T_worm!(bc, rng, δB_0s, beta)
-    # if bond_config.bond == bonds_0
-    #     continue
-    # end
-    dict[copy(bc.bond)] = get(dict, copy(bc.bond), 0) + 1
-end
-println(length(keys(dict)))
-
-plot_bondsnv(bc)
-
-
 # Single beta and study distribution
 L=2
 N=2
@@ -109,6 +43,8 @@ end
 
 p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="Log Frequency (normalized)", legend=false)
 plot!(p2,energies, energies, c=:red, label="E=ΔF line")
+title!(p2, "Actual Energy vs. Estimated Energy beta=$beta")
+display(p2)
 
 
 p = scatter(
@@ -126,16 +62,6 @@ p = scatter(
 ylims!(p, maximum(counts) * 0.01, maximum(counts) * 1.1)
 display(p)
 
-#plot of the calculated energies vs. estimated energy from frequency of appearance
-p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="Log Frequency (normalized)", legend=false)
-plot!(p2,energies, energies, c=:red, label="E=ΔF line")
-title!(p2, "Actual Energy vs. Estimated Energy beta=$beta")
-display(p2)
-
-
-
-
-plot_bondsnv(bc)
 
 ## Sort by frequency and plot top 10
 sorted_configs = sort(collect(dict), by=x->x[2], rev=true)
@@ -148,7 +74,6 @@ for (config, count) in top_configs
     # display(p)
 end
 
--log(sorted_configs[4][2]/sorted_configs[3][2])/beta
 
 # Study detailed balance between two states
 state_A = copy(sorted_configs[4][1])
@@ -166,29 +91,6 @@ A_to_B, B_to_A = count_AB_transitions(
 
 println("Transitions from A to B: ", A_to_B)
 println("Transitions from B to A: ", B_to_A)
-
-
-#At zero temperature
-L=2
-N=2
-lattice = Lattice(L,L)
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly)) #Initialize charges to zero
-rng = MersenneTwister(1234)
-δB_0s=δB_0_tuple(bc)
-
-beta=log(2)/5 #log(4)/5
-#Store counts in a dictionary
-dict=Dict{Vector, Int64}()
-
-for i in 1:10^7
-    #bonds_0=copy(bond_config.bond)
-     MC_T_worm!(bc, rng, δB_0s, beta)
-    # if bond_config.bond == bonds_0
-    #     continue
-    # end
-    dict[copy(bc.bond)] = get(dict, copy(bc.bond), 0) + 1
-end
-println(length(keys(dict)))
 
 
 
@@ -411,7 +313,7 @@ function MC_T_typicalE!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vara
     return (true, 0.0)
 end
 
-L=2
+L=4
 N=2
 lattice = Lattice(L,L)
 
