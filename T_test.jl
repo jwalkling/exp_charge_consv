@@ -9,22 +9,68 @@ using CSV
 using Printf
 using Colors
 
+
+
+
+#Import the locally stored data
+#Parameters
+Ecutoffs = [20, 10, 5, 20, 10, 5]
+betas = [0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+directory = "../ECC_data/T>0/Dist_Test/3x3/"
+
+for i in 4:6
+    beta=betas[i]
+    filename  = joinpath(directory, "Dist_data$(i).csv")
+    df = CSV.read(filename, DataFrame)
+    energies = df.energy
+    counts = df.count
+    p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="Log Frequency (normalized)", legend=false)
+    plot!(p2,energies, energies, c=:red, label="E=ΔF line")
+    title!(p2, "Actual Energy vs. Estimated Energy beta=$beta")
+    display(p2)
+end
+
+i=2
+filename  = joinpath(directory, "Dist_data$(i).csv")
+df = CSV.read(filename, DataFrame)
+beta=betas[i]
+energies = df.energy
+counts = df.count
+p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="-log(p)/beta", legend=false)
+xlims!(p2,0,20)
+ylims!(p2,0,20)
+plot!(p2,energies, energies, c=:red, label="E=ΔF line")
+title!(p2, "Energy vs. Estimated Energy beta=$beta for 3x3 lattice")
+display(p2)
+
+#Histogram of the counts
+
+i=6
+filename  = joinpath(directory, "Dist_data$(i).csv")
+df = CSV.read(filename, DataFrame)
+beta=betas[i]
+energies = df.energy
+counts = df.count
+p=plot(xlims=(0, 100))
+histogram!(p,energies, nbins=200, xlabel="Energy", ylabel="Frequency", title="Histogram of Counts at beta=$beta")
+#xlims!(p, 0, 100)
+display(p)
 # Single beta and study distribution
-L=2
+L=3
 N=2
 lattice = Lattice(L,L)
 bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly)) #Initialize charges to zero
 rng = MersenneTwister()#MersenneTwister(1234)
 δB_0s=δB_0_tuple(bc)
 
-beta=0.01#log(4)/5#log(4)/5
-iterations=10^8
+beta=0.01 #0.01#log(4)/5#log(4)/5
+iterations=10^6 #10^8
 #Store counts in a dictionary
 dict=Dict{Vector, Int64}()
 
 for i in 1:iterations
     #bonds_0=copy(bond_config.bond)
-    MC_T_worm!(bc, rng, δB_0s, beta, exp(beta*75))
+    MC_T_worm!(bc, rng, δB_0s, beta, exp(beta*50))
     # if bond_config.bond == bonds_0
     #     continue
     # end
@@ -40,6 +86,24 @@ for (i, bond) in enumerate(bonds)
     energies[i] = sum(vertex_charges(bc).^2)
 end
 
+
+#Import the locally stored data
+#Parameters
+Ecutoffs = [20, 10, 5, 20, 10, 5]
+betas = [0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+directory = "../ECC_data/T>0/Dist_Test/3x3/"
+
+for i in 4:6
+    beta=betas[i]
+    filename  = joinpath(directory, "Dist_data$(i).csv")
+    df = CSV.read(filename, DataFrame)
+    energies = df.energy
+    counts = df.count
+    p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="Log Frequency (normalized)", legend=false)
+    plot!(p2,energies, energies, c=:red, label="E=ΔF line")
+    title!(p2, "Actual Energy vs. Estimated Energy beta=$beta")
+    display(p2)
+end
 
 p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="Log Frequency (normalized)", legend=false)
 plot!(p2,energies, energies, c=:red, label="E=ΔF line")
