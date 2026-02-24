@@ -10,13 +10,71 @@ using Printf
 using Colors
 
 
+function thindata_random_bernoulli(data1, data2, factor; rng=Random.default_rng())
+    N = length(data1)
+    N == length(data2) || throw(DimensionMismatch("data1 and data2 must have same length"))
+
+    p = 1 / factor
+
+    out1 = Vector{eltype(data1)}()
+    out2 = Vector{eltype(data2)}()
+    sizehint!(out1, max(1, N ÷ factor))
+    sizehint!(out2, max(1, N ÷ factor))
+
+    @inbounds for i in 1:N
+        if rand(rng) < p
+            push!(out1, data1[i])
+            push!(out2, data2[i])
+        end
+    end
+    return out1, out2
+end
+#--------------------------------
+# Varying Ecutoff and beta for 3x3 lattice
+#--------------------------------
+
+#Import the locally stored data
+#Parameters
+betas = [0.01,0.1,1.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+Ecutoffs = [[60,50,40],[50,40,30],[20,15,10]]#[20, 10, 5, 20, 10, 5]
+directory = "../ECC_data/T>0/Dist_Test/3x3/Diff_Cutoffs2/"
+
+reddata=[0,2,6,8,10,16,20]
+i=1
+for j in 1:3
+    filename  = joinpath(directory, "dist_data$(betas[i])_$(Ecutoffs[i][j]).csv")
+    df = CSV.read(filename, DataFrame)
+    beta=betas[i]
+    energies = df.energy
+    counts = df.count
+
+    factor=10^2
+    energies,counts = thindata_random_bernoulli(energies, counts,factor)
+    p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="-log(p)/beta", legend=false)
+    xlims!(p2,0,10)
+    ylims!(p2,0,10)
+    plot!(p2,reddata,reddata, c=:red, label="E=ΔF line")
+    title!(p2, "E (red) vs. Estimate [beta=$beta for 3x3 w/ Ecut=$(Ecutoffs[i][j])]")
+    display(p2)
+end
+
+
+filename  = joinpath(directory, "dist_data0.01_50.csv")
+df = CSV.read(filename, DataFrame)
+
+
+
+
+
+
+
 
 
 #Import the locally stored data
 #Parameters
-Ecutoffs = [20, 10, 5, 20, 10, 5]
-betas = [0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
-directory = "../ECC_data/T>0/Dist_Test/3x3/"
+Ecutoffs = [40,20,20,10,10,5]#[20, 10, 5, 20, 10, 5]
+betas = [0.5,0.5,1.0,1.0,2.0,2.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+directory = "../ECC_data/T>0/Dist_Test/3x3/Diff_Cuttoffs/"
 
 for i in 4:6
     beta=betas[i]
@@ -30,8 +88,8 @@ for i in 4:6
     display(p2)
 end
 
-i=2
-filename  = joinpath(directory, "Dist_data$(i).csv")
+i=3
+filename  = joinpath(directory, "Dist_data$(i)_$(Ecutoffs[i]).csv")
 df = CSV.read(filename, DataFrame)
 beta=betas[i]
 energies = df.energy
@@ -40,11 +98,11 @@ p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstr
 xlims!(p2,0,20)
 ylims!(p2,0,20)
 plot!(p2,energies, energies, c=:red, label="E=ΔF line")
-title!(p2, "Energy vs. Estimated Energy beta=$beta for 3x3 lattice")
+title!(p2, "E (red) vs. Estimate [beta=$beta for 3x3 w/ Ecut=$(Ecutoffs[i])]")
 display(p2)
+savefig(p2, joinpath(directory, "Energy_vs_Estimate_beta$(betas[i])_Ecut$(Ecutoffs[i]).png"))
 
 #Histogram of the counts
-
 i=6
 filename  = joinpath(directory, "Dist_data$(i).csv")
 df = CSV.read(filename, DataFrame)
@@ -55,6 +113,21 @@ p=plot(xlims=(0, 100))
 histogram!(p,energies, nbins=200, xlabel="Energy", ylabel="Frequency", title="Histogram of Counts at beta=$beta")
 #xlims!(p, 0, 100)
 display(p)
+
+p=plot()
+histogram!(p,log10.(counts), nbins=200, xlabel="Counts", ylabel="Frequency", title="Histogram of Counts at beta=$beta")
+#xlims!(p, 0, 100)
+display(p)
+
+
+p=scatter(energies,log10.(counts))
+xlims!(p,0,5)
+
+
+
+
+
+
 # Single beta and study distribution
 L=3
 N=2
