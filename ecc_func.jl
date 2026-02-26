@@ -70,6 +70,13 @@ end
     (vx + (h ? 0.5 : 0.0), vy + (h ? 0.0 : 0.5))
 end
 
+
+@inline function bond_distance(lat::Lattice, i::Int, j::Int)
+    x1, y1 = index_to_coord(lat, i)
+    x2, y2 = index_to_coord(lat, j)
+    sqrt((x2 - x1)^2 + (y2 - y1)^2)
+end
+
 function vertex_charges(bonds::Bonds)
     Lx = bonds.lattice.Lx
     Ly = bonds.lattice.Ly

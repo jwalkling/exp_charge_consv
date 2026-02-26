@@ -6,6 +6,54 @@ Created: 28.01.2026
 include("/Users/jamwalk/Desktop/Research/Roderich/Discrete CSL/exp_charge_consv/ecc_func.jl")
 
 
+"""
+    paired_diagonal_bonds(indexc::Int; inc::Int, max_index::Int)
+
+Return two vectors of bond indices along the line obtained by stepping ±inc:
+- `same`: indices with the same orientation (parity) as `indexc`
+- `other`: paired indices with opposite orientation (index±1)
+
+Assumes orientation is encoded by parity: odd vs even.
+"""
+function paired_diagonal_bonds(indexc::Int; inc::Int, max_index::Int)
+    # paired bond of opposite orientation
+    indexc2 = isodd(indexc) ? indexc + 1 : indexc - 1
+
+    same  = Int[]
+    other = Int[]
+
+    # helper: append current pair if in bounds
+    @inline function maybe_push!(p1::Int, p2::Int)
+        if 1 <= p1 <= max_index && 1 <= p2 <= max_index
+            if p1 != indexc
+                push!(same, p1)
+            end
+            push!(other, p2)
+            return true
+        end
+        return false
+    end
+
+    # negative direction (excluding center to avoid duplicates)
+    p1, p2 = indexc - inc, indexc2 - inc
+    while maybe_push!(p1, p2)
+        p1 -= inc
+        p2 -= inc
+    end
+    
+    maybe_push!(indexc, indexc2)  # include the center bond itself in the "other" list
+
+    # positive direction (excluding center to avoid duplicates)
+    p1, p2 = indexc + inc, indexc2 + inc
+    while maybe_push!(p1, p2)
+        p1 += inc
+        p2 += inc
+    end
+
+    return same, other
+end
+
+
 #-----------------------------
 # Find the average bond values
 #-----------------------------
@@ -331,58 +379,18 @@ lattice = Lattice(L,L)
 indexc=Int(2*L) #Int((L-1)*L) #Comparison index of the bond
 
 #Find the paired vertical/horizontal bond index
-if indexc % 2 == 1
-    indexc_2=indexc+1
-else
-    indexc_2=indexc-1
-end
-
-diagp_bonds_1=[] #Vertical only
-diagp_bonds_2=[] #Horizontal only
-
-#To move up a row and left it is 2Lx - 2. 
-point_1=indexc
-point_2=indexc_2
-while point_1 & point_2 > 0
-    push!(diagp_bonds_1, point_1)
-    push!(diagp_bonds_2, point_2)
-    point_1 -= 2*L - 2
-    point_2 -= 2*L - 2
-end
-#Now in the positive direction
-point_1=indexc
-point_2=indexc_2
-while point_1 & point_2 < 2*L*L
-    push!(diagp_bonds_1, point_1)
-    push!(diagp_bonds_2, point_2)
-    point_1 += 2*L - 2
-    point_2 += 2*L - 2
-end
-
-@inline function index_to_coord(lat::Lattice, i::Int)
-    h = isodd(i)
-    v = ((i + (h ? 1 : 0)) ÷ 2) - 1
-    vx = v % lat.Lx
-    vy = v ÷ lat.Lx
-    (vx + (h ? 0.5 : 0.0), vy + (h ? 0.0 : 0.5))
-end
-
-@inline function bond_distance(lat::Lattice, i::Int, j::Int)
-    x1, y1 = index_to_coord(lat, i)
-    x2, y2 = index_to_coord(lat, j)
-    sqrt((x2 - x1)^2 + (y2 - y1)^2)
-end
+same, other = paired_diagonal_bonds(Int(2L); inc=2L-2, max_index=2L*L)
 
 
 
-N=10
+N=2
 bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
 
 Cbonds=Cdict[N][indexc, :]
 
 rs=[]
 Cm=[]
-for bond in diagp_bonds_2
+for bond in other
     push!(rs, bond_distance(lattice, indexc, bond))
     push!(Cm,Cbonds[bond])
 end
