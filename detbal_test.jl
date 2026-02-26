@@ -139,6 +139,10 @@ for i in 1:iterations
         push!(loop_lengths,LengthLoop)
         count+=1
     end
+    if i % 100000 == 0
+        println(i/iterations)
+        println("Iteration: ", i, " Loop Length: ", LengthLoop, " Count: ", count)
+    end
 end
 
 power=1/4
@@ -153,7 +157,7 @@ for ℓ in loop_lengths
 end
 
 length_values = 0:maxL
-maxval=500
+maxval=400
 p=scatter(length_values[2:maxval], freq[2:maxval], xlabel="Loop Length", ylabel="Frequency", title="Distribution of Loop Lengths", 
     yscale=:log10,
     xscale=:log10)

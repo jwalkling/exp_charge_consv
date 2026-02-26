@@ -62,13 +62,12 @@ No global bound check; only the geometric edge checks.
 end
 
 # Function to convert index to coordinate of centre of link
-@inline function index_to_coord(lat::Lattice, index::Int)
-    Ly = lat.Ly
-    q, r = divrem(index - 1, Ly)
-    offset = 0.5 * (r & 0x1)
-    x = q + 1 + offset
-    y = 1.0 + 0.5 * r
-    return (x, y)
+@inline function index_to_coord(lat::Lattice, i::Int)
+    h = isodd(i)
+    v = ((i + (h ? 1 : 0)) ÷ 2) - 1
+    vx = v % lat.Lx
+    vy = v ÷ lat.Lx
+    (vx + (h ? 0.5 : 0.0), vy + (h ? 0.0 : 0.5))
 end
 
 function vertex_charges(bonds::Bonds)

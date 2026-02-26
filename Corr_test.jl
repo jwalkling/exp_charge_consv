@@ -323,3 +323,91 @@ for N in Ns
     display(p)
     savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_L20_it1e9.png"))
 end
+
+#Plot correlators in the direction -x=y
+# Get the list of bond indices along the -x=y direction for the reference bond at indexc
+L=20
+lattice = Lattice(L,L)
+indexc=Int(2*L) #Int((L-1)*L) #Comparison index of the bond
+
+#Find the paired vertical/horizontal bond index
+if indexc % 2 == 1
+    indexc_2=indexc+1
+else
+    indexc_2=indexc-1
+end
+
+diagp_bonds_1=[] #Vertical only
+diagp_bonds_2=[] #Horizontal only
+
+#To move up a row and left it is 2Lx - 2. 
+point_1=indexc
+point_2=indexc_2
+while point_1 & point_2 > 0
+    push!(diagp_bonds_1, point_1)
+    push!(diagp_bonds_2, point_2)
+    point_1 -= 2*L - 2
+    point_2 -= 2*L - 2
+end
+#Now in the positive direction
+point_1=indexc
+point_2=indexc_2
+while point_1 & point_2 < 2*L*L
+    push!(diagp_bonds_1, point_1)
+    push!(diagp_bonds_2, point_2)
+    point_1 += 2*L - 2
+    point_2 += 2*L - 2
+end
+
+@inline function index_to_coord(lat::Lattice, i::Int)
+    h = isodd(i)
+    v = ((i + (h ? 1 : 0)) ÷ 2) - 1
+    vx = v % lat.Lx
+    vy = v ÷ lat.Lx
+    (vx + (h ? 0.5 : 0.0), vy + (h ? 0.0 : 0.5))
+end
+
+@inline function bond_distance(lat::Lattice, i::Int, j::Int)
+    x1, y1 = index_to_coord(lat, i)
+    x2, y2 = index_to_coord(lat, j)
+    sqrt((x2 - x1)^2 + (y2 - y1)^2)
+end
+
+
+
+N=10
+bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
+
+Cbonds=Cdict[N][indexc, :]
+
+rs=[]
+Cm=[]
+for bond in diagp_bonds_2
+    push!(rs, bond_distance(lattice, indexc, bond))
+    push!(Cm,Cbonds[bond])
+end
+p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along -x=y for N=$(N), L=20, it=10^9",
+    yscale=:log10,
+    xscale=:log10)
+ylims!(p, 10^(-4), 1)
+display(p)
+savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))
+
+
+
+#-------------------------------
+# Testing the coordinates function
+#-------------------------------
+p = plot()
+for i in 1:(2*L^2)
+    x, y = index_to_coord(lattice, i)
+    scatter!(p, [x], [y])   # vectors, so Plots knows it's one point
+end
+display(p)
+
+
+index=3
+vertex=Int((index+1)/2) #site index
+vx = ((vertex - 1) % 4)
+vy = ((vertex - 1) ÷ 4)
+println("Vertex: ", vertex, " vx: ", vx, " vy: ", vy)
