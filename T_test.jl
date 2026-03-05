@@ -59,15 +59,38 @@ for j in 1:3
 end
 
 
-filename  = joinpath(directory, "dist_data0.01_50.csv")
+filename  = joinpath(directory, "dist_data1.0_10.csv")
 df = CSV.read(filename, DataFrame)
+beta=1.0
+energies = df.energy
+counts = df.count
+p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="-log(p)/beta", legend=false)
+xlims!(p2,0,10)
+ylims!(p2,0,10)
+
+for Echoose in 6:15
+    counts1=[]
+    for i in 1:length(energies)
+        Ei=energies[i]
+        if Ei == Echoose
+            push!(counts1, counts[i])
+        end
+    end
+
+    p=histogram(counts1, nbins=30, xlabel="Counts at E=$(Echoose)", ylabel="Frequency", title="Histogram of freq at E=$(Echoose) for beta=1.0 & Ecut=10")
+    display(p)
+end
 
 
-
-
-
-
-
+filename  = joinpath(directory, "dist_data0.01_60.csv")
+df = CSV.read(filename, DataFrame)
+beta=0.01
+energies = df.energy
+counts = df.count
+p=plot()
+histogram!(p,energies, nbins=200, xlabel="Energy", ylabel="Frequency", title="Histogram of Counts at beta=$beta")
+#xlims!(p, 0, 100)
+display(p)
 
 
 #Import the locally stored data

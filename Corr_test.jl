@@ -6,6 +6,7 @@ Created: 28.01.2026
 include("/Users/jamwalk/Desktop/Research/Roderich/Discrete CSL/exp_charge_consv/ecc_func.jl")
 
 
+#TK OTHER ONLY SET UP TO WORK FOR 2L-2 increment since we relate them with ±1
 """
     paired_diagonal_bonds(indexc::Int; inc::Int, max_index::Int)
 
@@ -372,14 +373,17 @@ for N in Ns
     savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_L20_it1e9.png"))
 end
 
-#Plot correlators in the direction -x=y
+
+#-----------------------------------------
+# Plot correlators in the direction -x=y
+#-----------------------------------------
 # Get the list of bond indices along the -x=y direction for the reference bond at indexc
 L=20
 lattice = Lattice(L,L)
-indexc=Int(2*L) #Int((L-1)*L) #Comparison index of the bond
+indexc=1 #Int((L-1)*L) #Comparison index of the bond
 
 #Find the paired vertical/horizontal bond index
-same, other = paired_diagonal_bonds(Int(2L); inc=2L-2, max_index=2L*L)
+same, other = paired_diagonal_bonds(Int(2L); inc=2L+2, max_index=2L*L)
 
 
 
@@ -401,6 +405,35 @@ ylims!(p, 10^(-4), 1)
 display(p)
 savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))
 
+
+#-------------------------------
+# Plot correlators in the direction x=y
+#-------------------------------
+L=20
+lattice = Lattice(L,L)
+indexc=1#Int((L-1)*L) #Int((L-1)*L) #Comparison index of the bond
+
+#Find the paired vertical/horizontal bond index
+same, other = paired_diagonal_bonds(indexc; inc=2*L+2, max_index=2L*L)
+
+
+
+N=2
+bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
+
+Cbonds=Cdict[N][indexc, :]
+
+rs=[]
+Cm=[]
+for bond in same
+    push!(rs, bond_distance(lattice, indexc, bond))
+    push!(Cm,Cbonds[bond])
+end
+p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along x=y for N=$(N), L=20, it=10^9",
+    yscale=:log10)
+#ylims!(p, 10^(-4), 1)
+display(p)
+savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag-.png"))
 
 
 #-------------------------------

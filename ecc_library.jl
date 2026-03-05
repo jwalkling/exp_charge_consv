@@ -1281,7 +1281,7 @@ end
 display(p)
 
 
-lattice_1 = Lattice(3,3)
+lattice_1 = Lattice(20,20)
 
 p = plot(
     legend = false,
