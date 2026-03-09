@@ -9,6 +9,66 @@ using CSV
 using Printf
 using Colors
 
+# ============================================================
+# Helpers
+# ============================================================
+
+make_bc(lattice, N) = Bonds(
+    lattice,
+    N,
+    zeros(Int, 2 * lattice.Lx * lattice.Ly),
+    zeros(Int, lattice.Lx * lattice.Ly),
+)
+
+logcorr(C; norm=1.0) = log10(abs(C) / norm)
+
+function shift_curve(Cmat, bc, shifts; norm=1.0)
+    pts = Tuple{Float64,Float64}[]
+    for sh in shifts
+        r, C = Cbulk_r(Cmat, bc, sh)
+        if isfinite(C) && C != 0.0
+            push!(pts, (r, logcorr(C; norm=norm)))
+        end
+    end
+    return pts
+end
+
+function add_shift_curve!(
+    p,
+    Cmat,
+    bc,
+    shifts;
+    norm=1.0,
+    label="",
+    seriestype=:path,
+    kwargs...,
+)
+    pts = shift_curve(Cmat, bc, shifts; norm=norm)
+
+    if seriestype == :scatter
+        scatter!(p, pts; label=label, kwargs...)
+    else
+        plot!(p, pts; label=label, kwargs...)
+    end
+    return p
+end
+
+function finish_plot!(
+    p;
+    xlabel_str="Δr (bond midpoint grid)",
+    ylabel_str="log10 ⟨C(Δr,0)⟩_bulk",
+    title_str="",
+    ylims_tuple=nothing,
+    savepath=nothing,
+)
+    xlabel!(p, xlabel_str)
+    ylabel!(p, ylabel_str)
+    title!(p, title_str)
+    isnothing(ylims_tuple) || ylims!(p, ylims_tuple)
+    display(p)
+    isnothing(savepath) || savefig(p, savepath)
+    return p
+end
 #-----------------------------
 # Import Data
 #-----------------------------
@@ -27,439 +87,98 @@ for N in Ns
     Cdict[N]  = Cmat
 end
 
-#-----------------------------------
-# Bulk pair-averaged correlator
-#-----------------------------------
-#Returns a single pair r, C according to the averaging using translational symmetry
-function Cbulk_r(Cmat, bc, shift::Int)
-    lat= bc.lattice
-    Lx, Ly = lat.Lx, lat.Ly
-    Nbonds = 2*Lx * Ly
-    total = 0.0
-    count = 0
-    stored_dr = false
-    dr=0
+#---------------------------------------------------------------------
+# --- plotting bulk pair-averaged correlator vs. r for different N ---
+#---------------------------------------------------------------------
+# ============================================================
+# Plot 1: general bulk pair-averaged correlator vs N
+# ============================================================
 
-    for i in 1:Nbonds
-        (x0,y0) = index_to_coord(lat, i)
-        (x1,y1) = index_to_coord(lat, i+shift)
-        dx = x1 - x0
-        dy = y1 - y0
-        if dx < 0 || dy < 0 || dx >= Lx || dy >= Ly
-            continue
-        end
-        if stored_dr == false
-            dr=sqrt(dx^2+dy^2)
-            stored_dr = true
-        end
-        #println(dx^2+dy^2)
-        value=Cmat[i, i+shift]
-        if value == 0.0 # Ignore the zero values corresponding to the "dead" bonds used for PBC.
-            continue
-        end
-        total+=Cmat[i, i+shift] #TK stop the bonds where they go out of bounds.
-        count+=1
-    end
-    return (dr,count > 0 ? total / count : NaN)
-end
-
-#Returns the list of r's and C's using above function
-function Cbulk_vs_r(Cmat, bc; shift_max::Int, shift_min::Int=1)
-    rs   = Float64[]
-    Cs   = Float64[]
-    cnts = Int[]
-
-    for sh in shift_min:shift_max
-        r, C = Cbulk_r(Cmat, bc, sh)
-        if !isfinite(C)  # skip NaNs (no valid pairs for this shift)
-            continue
-        end
-        push!(rs, r)
-        push!(Cs, C)
-        push!(cnts, 1) # placeholder; if you want counts per shift, see note below
-    end
-
-    # Sort by distance (multiple shifts can map to the same r)
-    perm = sortperm(rs)
-    rs = rs[perm]; Cs = Cs[perm]
-
-    return rs, Cs
-end
-
-# --- plotting ---
 L = 20
 lattice = Lattice(L, L)
+plotname = "ECC_bulkC_T=0_Ns"
+shift_max = 23
 
 p = plot(xlabel="r", ylabel="log10 |C(r)|")
 
-shift_max = 23
-
 for N in Ns
     Cmat = Cdict[N]
-    bc = Bonds(lattice, N,
-               zeros(Int, 2 * lattice.Lx * lattice.Ly),
-               zeros(Int, lattice.Lx * lattice.Ly))
+    bc   = make_bc(lattice, N)
 
     rs, Cs = Cbulk_vs_r(Cmat, bc; shift_max=shift_max, shift_min=1)
+    ys = log10.(abs.(Cs) ./ N^2)
 
-
-    plot!(p, rs, log10.(abs.(Cs)./N^2), marker=:circle, ms=3, label="N=$N")
+    plot!(p, rs, ys; marker=:circle, ms=3, label="N=$N")
 end
-title!(p, "Bulk Pair-Averaged Correlator vs N (L=20, 10^9 iterations)")
-xlabel!(p, "Δr (bond midpoint grid)")
-ylabel!(p, "log10 ⟨C(Δr,0)/N^2⟩_bulk")
-display(p)
-savefig(p, joinpath(homedir(), "Downloads", plotname*"_general.png"))
 
-L=20
-lattice = Lattice(L,L)
-indexc=Int((L-1)*L) #Comparison index of the bond
+finish_plot!(
+    p;
+    xlabel_str="Δr (bond midpoint grid)",
+    ylabel_str="log10 ⟨C(Δr,0)/N^2⟩_bulk",
+    title_str="Bulk Pair-Averaged Correlator vs N (L=20, 10^9 iterations)",
+    savepath=joinpath(homedir(), "Downloads", plotname * "_general.png"),
+)
 
-#The labelling means bonds alternate between vert and horizont (A vs. B sublattice)
-plotname="ECC_bulkC_T=0_Ns"
-# First plot: A-A sublattice correlations
-p=plot()
+# ============================================================
+# Plot 2: A-A sublattice correlations
+# ============================================================
+
+p = plot()
+
 for N in Ns
     println("N = $N")
-    Cmat=Cdict[N]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
-    plot!(p,
-    [((r, C) = Cbulk_r(Cmat, bc, 2*Δq); (r, log10(abs(C)/N^2)))
-     for Δq in 1:Int(L÷2)+3],
-    label = "{N=$N}")  # exclude onsite
-end
+    Cmat = Cdict[N]
+    bc   = make_bc(lattice, N)
 
-Cxx_asymp(r) = (r == 0.0) ? NaN : 0.005*sqrt(r)*exp(-r)*(1+3/(8*r)-15/(2*(8*r)^2))  # asmyptotic expansion of R K1(R)
-rgrid = collect(range(2.0, stop=10, length=400))
-plot!(p, rgrid, log10.(abs.(Cxx_asymp.(rgrid))), lw=2, ls=:dash, label="asymp ∝ r K₁(r)")
-
-xlabel!(p, "Δr (bond midpoint grid)")
-ylabel!(p, "log10 ⟨C(Δr,0)⟩_bulk")
-ylims!(p, (-5.5,-1.5))
-title!(p, "⟨C(Δr,0)⟩_bulk in x-direction for A-A sublattices")
-display(p)
-savefig(p, joinpath(homedir(), "Downloads", plotname*"_AA.png"))
-
-# Second plot: A-B sublattice correlations
-p=plot()
-for N in Ns
-    println("N = $N")
-    Cmat=Cdict[N]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
-    plot!(p,
-    [((r, C) = Cbulk_r(Cmat, bc, 2*Δq+1); (r, log10(abs(C)/N^2)))
-     for Δq in 0:Int(L÷2)+3], #L/2-1 cuts off before they go into noise/finite-size effects.
-    label = "{N=$N}",
-) 
-end
-xlabel!(p, "Δr (bond midpoint grid)")
-ylabel!(p, "log10 ⟨C(Δr,0)⟩_bulk")
-ylims!(p, (-7,-1.0))
-title!(p, "⟨C(Δr,0)⟩_bulk in x-direction for A-B sublattices")
-display(p)
-
-
-# Third plot: All correlations together
-p=plot()
-for L in [10, 12, 14, 16, 18, 20, 22, 24]
-    println("L = $L")
-    N=2
-    lattice = Lattice(L,L)
-    indexc=Int((L-1)*L) #Comparison index of the bond
-    Cmat=Cdict[L]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
-    scatter!(p,
-    [((r, C) = Cbulk_r(Cmat, bc, Δq); (r, log10(abs(C))))
-     for Δq in 1:L-1],
-    label = "{L=$L}",
-    
-)  # exclude onsite
-end
-xlabel!(p, "Δr (bond midpoint grid)")
-ylabel!(p, "log10 ⟨C(Δr,0)⟩_bulk")
-ylims!(p, (-4,-0.5))
-title!(p, "⟨C(Δr,0)⟩_bulk in x-direction for all points")
-display(p)
-savefig(p, joinpath(homedir(), "Downloads", plotname*"_all.png"))
-
-
-
-
-function bond_corr_realspace_thermal!(
-    bc::Bonds,
-    rng::AbstractRNG,
-    b0::Int;
-    connected::Bool = false,
-    burnin::Int = 1_000,
-    nsamples::Int = 2_000,
-    thin::Int = 10,
-    mc_step! = MC_T0_loop!,
-)
-    b = bc.bond
-    (1 <= b0 <= length(b)) || throw(ArgumentError("b0 must satisfy 1 ≤ b0 ≤ length(bc.bond)"))
-
-    δB_0s = δB_0_tuple(bc)
-
-    @inbounds for _ in 1:burnin
-        mc_step!(bc, rng, δB_0s)
-    end
-
-    meanC = zeros(Float64, length(b))
-    M2C   = zeros(Float64, length(b))
-
-    @inbounds for s in 1:nsamples
-        for _ in 1:thin
-            mc_step!(bc, rng, δB_0s)
-        end
-
-        s0 = b[b0]
-        μ  = connected ? (sum(b) / length(b)) : 0.0
-
-        @inbounds for bi in eachindex(b)
-            C = connected ? (s0 - μ) * (b[bi] - μ) : (s0 * b[bi])
-            δ = C - meanC[bi]
-            meanC[bi] += δ / s
-            M2C[bi]   += δ * (C - meanC[bi])
-        end
-    end
-
-    Cstderr = fill(NaN, length(b))
-    if nsamples > 1
-        @inbounds Cstderr .= sqrt.((M2C ./ (nsamples - 1)) ./ nsamples)
-    end
-
-    return meanC, Cstderr
-end
-
-function plot_bond_corr_realspace(
-    bc::Bonds,
-    b0::Int,
-    meanC::AbstractVector;
-    cmap = :RdBu,
-    lw::Real = 4,
-    clim = nothing,
-    show_ref::Bool = true,
-    title::Union{Nothing,String} = nothing,
-)
-    b = bc.bond
-    lat = bc.lattice
-    Lx, Ly = lat.Lx, lat.Ly
-    Nsites = Lx * Ly
-
-    length(meanC) == length(b) || throw(DimensionMismatch("meanC must have length length(bc.bond)"))
-    (1 <= b0 <= length(b)) || throw(ArgumentError("b0 must satisfy 1 ≤ b0 ≤ length(bc.bond)"))
-
-    @inline site_of_bond(bi::Int) = (bi + 1) >>> 1
-    @inline is_hbond(bi::Int)     = isodd(bi)
-    @inline x_of_site(i::Int)     = ((i - 1) % Lx) + 1
-    @inline y_of_site(i::Int)     = ((i - 1) ÷ Lx) + 1
-
-    xs = Float64[]; ys = Float64[]; zs = Float64[]
-
-    @inbounds for i in 1:Nsites
-        x = x_of_site(i)
-        y = y_of_site(i)
-
-        if x < Lx
-            bi = 2i - 1
-            C  = meanC[bi]
-            append!(xs, (x, x+1, NaN))
-            append!(ys, (y, y,   NaN))
-            append!(zs, (C, C,   NaN))
-        end
-
-        if y < Ly
-            bi = 2i
-            C  = meanC[bi]
-            append!(xs, (x, x,   NaN))
-            append!(ys, (y, y+1, NaN))
-            append!(zs, (C, C,   NaN))
-        end
-    end
-
-    if clim === nothing
-        m = maximum(abs, meanC)
-        clim = (-m, m)
-    end
-
-    p = plot(xs, ys;
-        seriestype   = :path,
-        line_z       = zs,
-        c            = cmap,
-        clim         = clim,
-        linewidth    = lw,
-        aspect_ratio = :equal,
-        xlabel       = "x",
-        ylabel       = "y",
-        colorbar     = true,
-        legend       = false,
-        title        = title === nothing ? "Bond–bond correlator map, b0=$b0" : title,
+    aa_shifts = (2 * Δq for Δq in 1:(Int(L ÷ 2) + 3))
+    add_shift_curve!(
+        p, Cmat, bc, aa_shifts;
+        norm=N^2,
+        label="N=$N",
     )
-
-    xs_v = [((i-1) % Lx) + 1 for i in 1:Nsites]
-    ys_v = [((i-1) ÷ Lx) + 1 for i in 1:Nsites]
-    scatter!(p, xs_v, ys_v; markersize=3, marker=:circle, color=:black)
-
-    if show_ref
-        i0 = site_of_bond(b0)
-        x0, y0 = x_of_site(i0), y_of_site(i0)
-
-        if is_hbond(b0)
-            x0 < Lx || throw(ArgumentError("b0=$b0 is a horizontal bond on the right boundary (invalid link)."))
-            plot!(p, [x0, x0+1], [y0, y0]; linewidth=lw+2, color=:black, label="")
-        else
-            y0 < Ly || throw(ArgumentError("b0=$b0 is a vertical bond on the top boundary (invalid link)."))
-            plot!(p, [x0, x0], [y0, y0+1]; linewidth=lw+2, color=:black, label="")
-        end
-    end
-
-    return p
 end
 
-function plot_bond_corr_realspace_signlogshade(
-    bc::Bonds,
-    b0::Int,
-    meanC::AbstractVector;
-    lw::Real = 4,
-    show_ref::Bool = true,
-    title::Union{Nothing,String} = nothing,
-    # magnitude -> darkness mapping
-    eps_mag::Real = 1e-15,          # floor for |C| to avoid log(0)
-    vmin::Union{Nothing,Real} = nothing,  # min magnitude for scaling (in |C|)
-    vmax::Union{Nothing,Real} = nothing,  # max magnitude for scaling (in |C|)
-    γ::Real = 1.0,                  # gamma for contrast: >1 emphasizes extremes
-    light_min::Real = 0.15,         # darkest (for largest |C|)
-    light_max::Real = 0.95,         # lightest (for smallest nonzero |C|)
+Cxx_asymp(r) = r == 0.0 ? NaN : 0.005 * sqrt(r) * exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
+rgrid = collect(range(2.0, stop=10, length=400))
+plot!(p, rgrid, log10.(abs.(Cxx_asymp.(rgrid))); lw=2, ls=:dash, label="asymp ∝ r K₁(r)")
+
+finish_plot!(
+    p;
+    xlabel_str="Δr (bond midpoint grid)",
+    ylabel_str="log10 ⟨C(Δr,0)⟩_bulk",
+    title_str="⟨C(Δr,0)⟩_bulk in x-direction for A-A sublattices",
+    ylims_tuple=(-5.5, -1.5),
+    savepath=joinpath(homedir(), "Downloads", plotname * "_AA.png"),
 )
-    b = bc.bond
-    lat = bc.lattice
-    Lx, Ly = lat.Lx, lat.Ly
-    Nsites = Lx * Ly
 
-    length(meanC) == length(b) || throw(DimensionMismatch("meanC must have length length(bc.bond)"))
-    (1 <= b0 <= length(b)) || throw(ArgumentError("b0 must satisfy 1 ≤ b0 ≤ length(bc.bond)"))
-    eps_mag > 0 || throw(ArgumentError("eps_mag must be > 0"))
-    (0 < light_min < light_max < 1) || throw(ArgumentError("Require 0 < light_min < light_max < 1"))
-    γ > 0 || throw(ArgumentError("γ must be > 0"))
+# ============================================================
+# Plot 3: A-B sublattice correlations
+# ============================================================
 
-    @inline site_of_bond(bi::Int) = (bi + 1) >>> 1
-    @inline is_hbond(bi::Int)     = isodd(bi)
-    @inline x_of_site(i::Int)     = ((i - 1) % Lx) + 1
-    @inline y_of_site(i::Int)     = ((i - 1) ÷ Lx) + 1
+p = plot()
 
-    # --- determine scaling range for log-magnitude ---
-    # We'll map log10(|C|) in [log10(vmin), log10(vmax)] -> lightness in [light_max, light_min]
-    absvals = Float64[]
-    sizehint!(absvals, length(meanC))
-    @inbounds for c in meanC
-        a = abs(float(c))
-        if a > 0
-            push!(absvals, a)
-        end
-    end
-    isempty(absvals) && error("meanC appears to be identically zero.")
+for N in Ns
+    println("N = $N")
+    Cmat = Cdict[N]
+    bc   = make_bc(lattice, N)
 
-    vmin_eff = vmin === nothing ? maximum([minimum(absvals), float(eps_mag)]) : max(float(vmin), float(eps_mag))
-    vmax_eff = vmax === nothing ? maximum(absvals) : max(float(vmax), vmin_eff)
-
-    logmin = log10(vmin_eff)
-    logmax = log10(vmax_eff)
-    denom  = max(logmax - logmin, 1e-30)  # avoid divide by zero
-
-    # --- mapping magnitude -> lightness (HSL) ---
-    # t=0 for smallest mag => light_max (nearly white)
-    # t=1 for largest  mag => light_min (dark)
-    @inline function lightness_from_mag(a::Float64)::Float64
-        t = (log10(max(a, float(eps_mag))) - logmin) / denom
-        t = clamp(t, 0.0, 1.0)
-        t = t^float(γ)
-        return light_max - t*(light_max - light_min)
-    end
-
-    # Fixed hues: blue for negative, red for positive. Saturation high.
-    HRED  = 0.0
-    HBLUE = 220.0  # "deep blue"
-    SAT   = 0.90
-
-    @inline function color_from_C(c::Real)
-        c == 0 && return RGB(1,1,1)  # white
-        a = abs(float(c))
-        L = lightness_from_mag(a)
-        h = (c > 0) ? HRED : HBLUE
-        return convert(RGB, HSL(h, SAT, L))
-    end
-
-    # We'll build segments and plot them as one series per segment so each gets its own color.
-    # This avoids relying on line_z colormap normalization entirely.
-    p = plot(; aspect_ratio=:equal, xlabel="x", ylabel="y",
-             legend=false,
-             title = title === nothing ? "Sign-hue + log(|C|) shade map, b0=$b0" : title)
-
-    @inbounds for i in 1:Nsites
-        x = x_of_site(i)
-        y = y_of_site(i)
-
-        if x < Lx
-            bi = 2i - 1
-            col = color_from_C(meanC[bi])
-            plot!(p, [x, x+1], [y, y]; linewidth=lw, color=col, label="")
-        end
-
-        if y < Ly
-            bi = 2i
-            col = color_from_C(meanC[bi])
-            plot!(p, [x, x], [y, y+1]; linewidth=lw, color=col, label="")
-        end
-    end
-
-    # vertices
-    xs_v = [((i-1) % Lx) + 1 for i in 1:Nsites]
-    ys_v = [((i-1) ÷ Lx) + 1 for i in 1:Nsites]
-    scatter!(p, xs_v, ys_v; markersize=3, marker=:circle, color=:black)
-
-    # reference bond highlight
-    if show_ref
-        i0 = site_of_bond(b0)
-        x0, y0 = x_of_site(i0), y_of_site(i0)
-
-        if is_hbond(b0)
-            x0 < Lx || throw(ArgumentError("b0=$b0 is a horizontal bond on the right boundary (invalid link)."))
-            plot!(p, [x0, x0+1], [y0, y0]; linewidth=lw+2, color=:black, label="")
-        else
-            y0 < Ly || throw(ArgumentError("b0=$b0 is a vertical bond on the top boundary (invalid link)."))
-            plot!(p, [x0, x0], [y0, y0+1]; linewidth=lw+2, color=:black, label="")
-        end
-    end
-
-    return p
+    ab_shifts = (2 * Δq + 1 for Δq in 0:(Int(L ÷ 2) + 3))
+    add_shift_curve!(
+        p, Cmat, bc, ab_shifts;
+        norm=N^2,
+        label="N=$N",
+    )
 end
 
-
-Cb, dCb = bond_corr_realspace_thermal!(bc, rng, indexc;
-    connected=true, burnin=1_000, nsamples=100_000_000, thin=20)
-
-p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cb)); clim=(-4,1.05))
-display(p)
-
-dmax = 6
-Cmean, Cstderr, npairs = bond_bond_corr_thermal_grid_fast!(bc, rng, dmax;
-    orientation = :both,
-    connected   = false,
-    burnin      = 1_000,
-    nsamples    = 900_000,
-    thin        = 20,
-    mc_step!    = MC_T0_loop!,
+finish_plot!(
+    p;
+    xlabel_str="Δr (bond midpoint grid)",
+    ylabel_str="log10 ⟨C(Δr,0)⟩_bulk",
+    title_str="⟨C(Δr,0)⟩_bulk in x-direction for A-B sublattices",
+    ylims_tuple=(-7.0, -1.0),
 )
 
-# dy=0 cut:
-Cs = @view Cmean[:, 1]
-plot(0:dmax, log10.(abs.(Cs)); xlabel="dx", ylabel="C(dx,0)", title="Bond-Bond Correlator Cut (dy=0)")
 
-
-rs, Cr, dCr, nr = radialize_corr(Cmean, Cstderr; dmax=dmax)
-p=plot(rs, log10.(abs.(Cr) .+ eps(Float64)); marker=:circle, xlabel="r", ylabel="log10|C(r)|", label="")
-xlims!(p, (0, dmax))
-display(p)
 
 
 

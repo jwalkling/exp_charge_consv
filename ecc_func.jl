@@ -430,7 +430,7 @@ end
 
 """
 One-chain thermal average of C(dx,dy) on a full grid dx,dy ∈ 0:dmax.
-
+Generates the correlators from the Monte Carlo algorithm.
 Returns:
     Cmean::Matrix, Cstderr::Matrix, npairs_mean::Matrix
 All are (dmax+1)×(dmax+1).
@@ -487,7 +487,7 @@ function bond_bond_corr_thermal_grid_fast!(
     return meanC, Cstderr, npmean
 end
 
-# --- radial binning (short + safe) ---
+# --- radial binning of the correlations ---
 function radialize_corr(Cmean::AbstractMatrix, Cstderr::AbstractMatrix; dmax::Int)
     shells = Dict{Int, Tuple{Float64,Float64,Int}}() # r2 => (sumC, sumVar, count) with var ~ dC^2
     @inbounds for dx in 0:dmax, dy in 0:dmax
@@ -514,6 +514,66 @@ function radialize_corr(Cmean::AbstractMatrix, Cstderr::AbstractMatrix; dmax::In
     end
     return rs, Cr, dCr, nr
 end
+
+"""
+The functions below are for calculating the bulk pair-averaged correlator C(r) using translational symmetry.
+Require the correlation data generated from bond_bond_corr_thermal_grid_fast! as an input.
+"""
+#Returns a single pair r, C according to the averaging using translational symmetry
+function Cbulk_r(Cmat, bc, shift::Int)
+    lat= bc.lattice
+    Lx, Ly = lat.Lx, lat.Ly
+    Nbonds = 2*Lx * Ly
+    total = 0.0
+    count = 0
+    stored_dr = false
+    dr=0
+
+    for i in 1:Nbonds
+        (x0,y0) = index_to_coord(lat, i)
+        (x1,y1) = index_to_coord(lat, i+shift)
+        dx = x1 - x0
+        dy = y1 - y0
+        if dx < 0 || dy < 0 || dx >= Lx || dy >= Ly
+            continue
+        end
+        if stored_dr == false
+            dr=sqrt(dx^2+dy^2)
+            stored_dr = true
+        end
+        #println(dx^2+dy^2)
+        value=Cmat[i, i+shift]
+        if value == 0.0 # Ignore the zero values corresponding to the "dead" bonds used for PBC.
+            continue
+        end
+        total+=Cmat[i, i+shift] #TK stop the bonds where they go out of bounds.
+        count+=1
+    end
+    return (dr,count > 0 ? total / count : NaN)
+end
+#Returns the list of r's and C's using above function
+function Cbulk_vs_r(Cmat, bc; shift_max::Int, shift_min::Int=1)
+    rs   = Float64[]
+    Cs   = Float64[]
+    cnts = Int[]
+
+    for sh in shift_min:shift_max
+        r, C = Cbulk_r(Cmat, bc, sh)
+        if !isfinite(C)  # skip NaNs (no valid pairs for this shift)
+            continue
+        end
+        push!(rs, r)
+        push!(Cs, C)
+        push!(cnts, 1) # placeholder; if you want counts per shift, see note below
+    end
+
+    # Sort by distance (multiple shifts can map to the same r)
+    perm = sortperm(rs)
+    rs = rs[perm]; Cs = Cs[perm]
+
+    return rs, Cs
+end
+
 
 #-------------------------
 # Plotting
