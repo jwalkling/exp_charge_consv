@@ -15,8 +15,10 @@ Return two vectors of bond indices along the line obtained by stepping ±inc:
 - `other`: paired indices with opposite orientation (index±1)
 
 Assumes orientation is encoded by parity: odd vs even.
+In minus xy direction
 """
-function paired_diagonal_bonds(indexc::Int; inc::Int, max_index::Int)
+function paired_diagonal_bonds_xym(indexc::Int; max_index::Int)
+    inc=2L-2
     # paired bond of opposite orientation
     indexc2 = isodd(indexc) ? indexc + 1 : indexc - 1
 
@@ -52,6 +54,37 @@ function paired_diagonal_bonds(indexc::Int; inc::Int, max_index::Int)
     end
 
     return same, other
+end
+
+function paired_bonds(indexc::Int; inc::Int, max_index::Int)
+    same  = Int[]
+
+    # helper: append current pair if in bounds
+    @inline function maybe_push!(p1::Int)
+        if 1 <= p1 <= max_index
+            if p1 != indexc
+                push!(same, p1)
+            end
+            return true
+        end
+        return false
+    end
+
+    # negative direction (excluding center to avoid duplicates)
+    p1 = indexc - inc
+    while maybe_push!(p1)
+        p1 -= inc
+    end
+    
+    maybe_push!(indexc)  # include the center bond itself in the "other" list
+
+    # positive direction (excluding center to avoid duplicates)
+    p1=indexc + inc
+    while maybe_push!(p1)
+        p1 += inc
+    end
+
+    return same #Return bonds of the same kind. Works in general. 
 end
 
 
@@ -380,10 +413,10 @@ end
 # Get the list of bond indices along the -x=y direction for the reference bond at indexc
 L=20
 lattice = Lattice(L,L)
-indexc=1 #Int((L-1)*L) #Comparison index of the bond
+indexc=Int((L-1)*L)#Int((L-1)*L) #Comparison index of the bond (Int(2L))
 
 #Find the paired vertical/horizontal bond index
-same, other = paired_diagonal_bonds(Int(2L); inc=2L+2, max_index=2L*L)
+same, other = paired_diagonal_bonds_xym(indexc; max_index=2L*L)
 
 
 
@@ -394,17 +427,38 @@ Cbonds=Cdict[N][indexc, :]
 
 rs=[]
 Cm=[]
-for bond in other
+for bond in same
     push!(rs, bond_distance(lattice, indexc, bond))
     push!(Cm,Cbonds[bond])
 end
 p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along -x=y for N=$(N), L=20, it=10^9",
-    yscale=:log10,
-    xscale=:log10)
-ylims!(p, 10^(-4), 1)
+    xscale=:log10,
+    yscale=:log10)
+ylims!(p, 10^(-3), 10^(-1.5))
+xlabel!(p, "x")
+ylabel!(p, "C(x,-x)")
 display(p)
-savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))
+savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag-.png"))
 
+N=20
+bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
+
+Cbonds=Cdict[N][indexc, :]
+
+rs=[]
+Cm=[]
+for bond in same
+    push!(rs, bond_distance(lattice, indexc, bond))
+    push!(Cm,Cbonds[bond])
+end
+p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along -x=y for N=$(N), L=20, it=10^9",
+    #xscale=:log10,
+    yscale=:log10)
+ylims!(p, 10^(-3.5), 10^(-1.5))
+xlabel!(p, "x")
+ylabel!(p, "C(x,-x)")
+display(p)
+savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag-.png"))
 
 #-------------------------------
 # Plot correlators in the direction x=y
@@ -414,7 +468,7 @@ lattice = Lattice(L,L)
 indexc=1#Int((L-1)*L) #Int((L-1)*L) #Comparison index of the bond
 
 #Find the paired vertical/horizontal bond index
-same, other = paired_diagonal_bonds(indexc; inc=2*L+2, max_index=2L*L)
+same = paired_bonds(indexc; inc=2*L+2, max_index=2L*L)
 
 
 
@@ -431,10 +485,28 @@ for bond in same
 end
 p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along x=y for N=$(N), L=20, it=10^9",
     yscale=:log10)
-#ylims!(p, 10^(-4), 1)
+ylims!(p, 10^(-5), 10^(-1))
 display(p)
-savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag-.png"))
+savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))
 
+
+
+N=20
+bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
+
+Cbonds=Cdict[N][indexc, :]
+
+rs=[]
+Cm=[]
+for bond in same
+    push!(rs, bond_distance(lattice, indexc, bond))
+    push!(Cm,Cbonds[bond])
+end
+p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along x=y for N=$(N), L=20, it=10^9",
+    yscale=:log10)
+ylims!(p, 10^(-6), 10^(-1))
+display(p)
+savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))
 
 #-------------------------------
 # Testing the coordinates function

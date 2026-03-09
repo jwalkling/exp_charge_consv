@@ -12,10 +12,10 @@ using Colors
 #-----------------------------
 # Import Data
 #-----------------------------
-#The data is taken for fixed L=24 and N=2 to see how correlations scale with the iterations
+#The data is taken for fixed L=20 to see how correlations scale with N
 Ns = [2,6,10,14,20]
 Cdict  = Dict{Int, Matrix{Float64}}()
-directory = "../ECC_data/T=0/Bond_C_Ns/it=10^9L=20/"
+directory = "../ECC_data/T=0/Bond_C_Ns/it=10^7L=20/"
 
 for N in Ns
     Cfile  = joinpath(directory, "Cmat_N$(N).csv")
@@ -30,6 +30,7 @@ end
 #-----------------------------------
 # Bulk pair-averaged correlator
 #-----------------------------------
+#Returns a single pair r, C according to the averaging using translational symmetry
 function Cbulk_r(Cmat, bc, shift::Int)
     lat= bc.lattice
     Lx, Ly = lat.Lx, lat.Ly
@@ -40,8 +41,8 @@ function Cbulk_r(Cmat, bc, shift::Int)
     dr=0
 
     for i in 1:Nbonds
-        (x0,y0) = index_to_coord2(lat, i)
-        (x1,y1) = index_to_coord2(lat, i+shift)
+        (x0,y0) = index_to_coord(lat, i)
+        (x1,y1) = index_to_coord(lat, i+shift)
         dx = x1 - x0
         dy = y1 - y0
         if dx < 0 || dy < 0 || dx >= Lx || dy >= Ly
@@ -62,17 +63,47 @@ function Cbulk_r(Cmat, bc, shift::Int)
     return (dr,count > 0 ? total / count : NaN)
 end
 
-L=20
-lattice = Lattice(L,L)
-indexc=Int((L-1)*L) #Comparison index of the bond
+#Returns the list of r's and C's using above function
+function Cbulk_vs_r(Cmat, bc; shift_max::Int, shift_min::Int=1)
+    rs   = Float64[]
+    Cs   = Float64[]
+    cnts = Int[]
 
-p=plot()
+    for sh in shift_min:shift_max
+        r, C = Cbulk_r(Cmat, bc, sh)
+        if !isfinite(C)  # skip NaNs (no valid pairs for this shift)
+            continue
+        end
+        push!(rs, r)
+        push!(Cs, C)
+        push!(cnts, 1) # placeholder; if you want counts per shift, see note below
+    end
+
+    # Sort by distance (multiple shifts can map to the same r)
+    perm = sortperm(rs)
+    rs = rs[perm]; Cs = Cs[perm]
+
+    return rs, Cs
+end
+
+# --- plotting ---
+L = 20
+lattice = Lattice(L, L)
+
+p = plot(xlabel="r", ylabel="log10 |C(r)|")
+
+shift_max = 23
+
 for N in Ns
-    Cmat=Cdict[N]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
-    plot!(p,log10.(abs.(bulk_pair_mean_r(Cmat, lattice, 10; margin=1)[2]/N^2)), label="N=$N")
-    xlims!(2,11)
-    ylims!(-6,0)
+    Cmat = Cdict[N]
+    bc = Bonds(lattice, N,
+               zeros(Int, 2 * lattice.Lx * lattice.Ly),
+               zeros(Int, lattice.Lx * lattice.Ly))
+
+    rs, Cs = Cbulk_vs_r(Cmat, bc; shift_max=shift_max, shift_min=1)
+
+
+    plot!(p, rs, log10.(abs.(Cs)./N^2), marker=:circle, ms=3, label="N=$N")
 end
 title!(p, "Bulk Pair-Averaged Correlator vs N (L=20, 10^9 iterations)")
 xlabel!(p, "Δr (bond midpoint grid)")
@@ -80,52 +111,53 @@ ylabel!(p, "log10 ⟨C(Δr,0)/N^2⟩_bulk")
 display(p)
 savefig(p, joinpath(homedir(), "Downloads", plotname*"_general.png"))
 
+L=20
+lattice = Lattice(L,L)
+indexc=Int((L-1)*L) #Comparison index of the bond
+
 #The labelling means bonds alternate between vert and horizont (A vs. B sublattice)
 plotname="ECC_bulkC_T=0_Ns"
 # First plot: A-A sublattice correlations
 p=plot()
-for L in [10, 12, 14, 16, 18, 20, 22, 24]
-    println("L = $L")
-    N=2
-    lattice = Lattice(L,L)
-    indexc=Int((L-1)*L) #Comparison index of the bond
-    Cmat=Cdict[L]
+for N in Ns
+    println("N = $N")
+    Cmat=Cdict[N]
     bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
     plot!(p,
-    [((r, C) = Cbulk_r(Cmat, bc, 2*Δq); (r, log10(abs(C))))
+    [((r, C) = Cbulk_r(Cmat, bc, 2*Δq); (r, log10(abs(C)/N^2)))
      for Δq in 1:Int(L÷2)+3],
-    label = "{L=$L}",
-)  # exclude onsite
-
+    label = "{N=$N}")  # exclude onsite
 end
+
+Cxx_asymp(r) = (r == 0.0) ? NaN : 0.005*sqrt(r)*exp(-r)*(1+3/(8*r)-15/(2*(8*r)^2))  # asmyptotic expansion of R K1(R)
+rgrid = collect(range(2.0, stop=10, length=400))
+plot!(p, rgrid, log10.(abs.(Cxx_asymp.(rgrid))), lw=2, ls=:dash, label="asymp ∝ r K₁(r)")
+
 xlabel!(p, "Δr (bond midpoint grid)")
 ylabel!(p, "log10 ⟨C(Δr,0)⟩_bulk")
-ylims!(p, (-4,-0.5))
+ylims!(p, (-5.5,-1.5))
 title!(p, "⟨C(Δr,0)⟩_bulk in x-direction for A-A sublattices")
 display(p)
 savefig(p, joinpath(homedir(), "Downloads", plotname*"_AA.png"))
 
 # Second plot: A-B sublattice correlations
 p=plot()
-for L in [10, 12, 14, 16, 18, 20, 22, 24]
-    println("L = $L")
-    N=2
-    lattice = Lattice(L,L)
-    indexc=Int((L-1)*L) #Comparison index of the bond
-    Cmat=Cdict[L]
+for N in Ns
+    println("N = $N")
+    Cmat=Cdict[N]
     bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
     plot!(p,
-    [((r, C) = Cbulk_r(Cmat, bc, 2*Δq+1); (r, log10(abs(C))))
+    [((r, C) = Cbulk_r(Cmat, bc, 2*Δq+1); (r, log10(abs(C)/N^2)))
      for Δq in 0:Int(L÷2)+3], #L/2-1 cuts off before they go into noise/finite-size effects.
-    label = "{L=$L}",
+    label = "{N=$N}",
 ) 
 end
 xlabel!(p, "Δr (bond midpoint grid)")
 ylabel!(p, "log10 ⟨C(Δr,0)⟩_bulk")
-ylims!(p, (-4,-0.5))
+ylims!(p, (-7,-1.0))
 title!(p, "⟨C(Δr,0)⟩_bulk in x-direction for A-B sublattices")
 display(p)
-savefig(p, joinpath(homedir(), "Downloads", plotname*"_AB.png"))
+
 
 # Third plot: All correlations together
 p=plot()
@@ -149,33 +181,9 @@ ylims!(p, (-4,-0.5))
 title!(p, "⟨C(Δr,0)⟩_bulk in x-direction for all points")
 display(p)
 savefig(p, joinpath(homedir(), "Downloads", plotname*"_all.png"))
-#-----------------------------------
-# Bond-Bond Correlator in Real Space
-#-----------------------------------
-L=22
-N=2
-lattice = Lattice(L,L)
-indexc=Int((L-1)*L) #Comparison index of the bond
-
-Cmat=Cdict[L]
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
-p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cmat[:,indexc])); clim=(-6,1.05))
-display(p)
-p = plot_bond_corr_realspace_signlogshade(bc, indexc, Cmat[indexc,:]; eps_mag=1e-12, γ=1.0, vmin=0.01, vmax=4)
-display(p)
 
 
 
-
-L=8
-N=2
-lattice = Lattice(L,L)
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
-rng = MersenneTwister(1234)
-δB_0s=δB_0_tuple(bond_config)
-
-
-indexc=Int((L-1)*L) #Comparison index of the bond
 
 function bond_corr_realspace_thermal!(
     bc::Bonds,

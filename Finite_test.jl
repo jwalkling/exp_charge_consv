@@ -108,28 +108,7 @@ function bond_corr_matrix_thermal!(
     return meanC, Cstderr
 end
 
-@inline function index_to_coord2(lat::Lattice, b::Int)::NTuple{2,Float64}
-    Lx = lat.Lx
 
-    # Map bond index b -> site index i (1..Lx*Ly)
-    i  = (b + 1) >>> 1          # == fld(b+1,2), but faster bitshift
-
-    # Site coords (x,y), row-major with x fastest
-    t  = i - 1
-    x  = (t % Lx) + 1
-    y  = (t ÷ Lx) + 1
-
-    # o = 1 for horizontal bonds (odd b), o = 0 for vertical bonds (even b)
-    o  = b & 1
-
-    # Midpoint:
-    #   odd (horizontal): (x+0.5, y)
-    #   even (vertical):  (x, y+0.5)
-    xf = Float64(x) + 0.5*Float64(o)
-    yf = Float64(y) + 0.5*Float64(1 - o)
-
-    return (xf, yf)
-end
 #-----------------------------
 # Import Data
 #-----------------------------
@@ -168,8 +147,8 @@ function Cbulk_r(Cmat, bc, shift::Int)
     dr=0
 
     for i in 1:Nbonds
-        (x0,y0) = index_to_coord2(lat, i)
-        (x1,y1) = index_to_coord2(lat, i+shift)
+        (x0,y0) = index_to_coord(lat, i)
+        (x1,y1) = index_to_coord(lat, i+shift)
         dx = x1 - x0
         dy = y1 - y0
         if dx < 0 || dy < 0 || dx >= Lx || dy >= Ly
@@ -211,17 +190,16 @@ for L in [10, 12, 14, 16, 18, 20, 22, 24]
     lattice = Lattice(L,L)
     indexc=Int((L-1)*L) #Comparison index of the bond
     Cmat=Cdict[L]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
     plot!(p,
     [((r, C) = Cbulk_r(Cmat, bc, 2*Δq); (r, log10(abs(C))))
      for Δq in 1:Int(L÷2)+3],
-    label = "{L=$L}",
-)  # exclude onsite
+    label = "{L=$L}")  # exclude onsite
 
 end
 xlabel!(p, "Δr (bond midpoint grid)")
 ylabel!(p, "log10 ⟨C(Δr,0)⟩_bulk")
-ylims!(p, (-4,-0.5))
+ylims!(p, (-4.5,-1.5))
 title!(p, "⟨C(Δr,0)⟩_bulk in x-direction for A-A sublattices")
 display(p)
 savefig(p, joinpath(homedir(), "Downloads", plotname*"_AA.png"))
@@ -234,7 +212,7 @@ for L in [10, 12, 14, 16, 18, 20, 22, 24]
     lattice = Lattice(L,L)
     indexc=Int((L-1)*L) #Comparison index of the bond
     Cmat=Cdict[L]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
     plot!(p,
     [((r, C) = Cbulk_r(Cmat, bc, 2*Δq+1); (r, log10(abs(C))))
      for Δq in 0:Int(L÷2)+3], #L/2-1 cuts off before they go into noise/finite-size effects.
@@ -256,7 +234,7 @@ for L in [10, 12, 14, 16, 18, 20, 22, 24]
     lattice = Lattice(L,L)
     indexc=Int((L-1)*L) #Comparison index of the bond
     Cmat=Cdict[L]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
     scatter!(p,
     [((r, C) = Cbulk_r(Cmat, bc, Δq); (r, log10(abs(C))))
      for Δq in 1:L-1],
@@ -641,7 +619,7 @@ display(p)
 p=plot(xlims=(0, L+1), ylims=(0, L+1), aspect_ratio=1, title="Bond Centres")
 
 for i in 1:4
-    plot!(p, index_to_coord2(lattice_image, i), seriestype=:scatter, label="Bond $i", aspect_ratio=1)
+    plot!(p, index_to_coord(lattice_image, i), seriestype=:scatter, label="Bond $i", aspect_ratio=1)
 end
 
 display(p)
