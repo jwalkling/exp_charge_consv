@@ -13,12 +13,6 @@ using Colors
 # Helpers
 # ============================================================
 
-make_bc(lattice, N) = Bonds(
-    lattice,
-    N,
-    zeros(Int, 2 * lattice.Lx * lattice.Ly),
-    zeros(Int, lattice.Lx * lattice.Ly),
-)
 
 logcorr(C; norm=1.0) = log10(abs(C) / norm)
 
@@ -75,7 +69,7 @@ end
 #The data is taken for fixed L=20 to see how correlations scale with N
 Ns = [2,10,20]#[2,6,10,14,20]
 Cdict  = Dict{Int, Matrix{Float64}}()
-directory = "../ECC_data/T=0/Bond_C_Ns/it=10^7L=20/"
+directory = "../ECC_data/T=0/Bond_C_Ns/it=10^9L=20/"
 
 for N in Ns
     Cfile  = joinpath(directory, "Cmat_N$(N).csv")
@@ -103,7 +97,7 @@ p = plot(xlabel="r", ylabel="log10 |C(r)|")
 
 for N in Ns
     Cmat = Cdict[N]
-    bc   = make_bc(lattice, N)
+    bc   = construct_bonds(lattice, N)
 
     rs, Cs = Cbulk_vs_r(Cmat, bc; shift_max=shift_max, shift_min=1)
     ys = log10.(abs.(Cs) ./ N^2)
@@ -129,7 +123,7 @@ p = plot()
 for N in Ns
     println("N = $N")
     Cmat = Cdict[N]
-    bc   = make_bc(lattice, N)
+    bc   = construct_bonds(lattice, N)
 
     aa_shifts = (2 * Δq for Δq in 1:(Int(L ÷ 2) + 3))
     add_shift_curve!(
@@ -161,7 +155,7 @@ p = plot()
 for N in Ns
     println("N = $N")
     Cmat = Cdict[N]
-    bc   = make_bc(lattice, N)
+    bc   = construct_bonds(lattice, N)
 
     ab_shifts = (2 * Δq + 1 for Δq in 0:(Int(L ÷ 2) + 3))
     add_shift_curve!(

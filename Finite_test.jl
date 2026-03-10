@@ -47,7 +47,7 @@ for L in [10, 12, 14, 16, 18, 20, 22, 24]
     lattice = Lattice(L,L)
     indexc=Int((L-1)*L) #Comparison index of the bond
     Cmat=Cdict[L]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
+    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly), [])
     plot!(p,
     [((r, C) = Cbulk_r(Cmat, bc, 2*Δq); (r, log10(abs(C))))
      for Δq in 1:Int(L÷2)+3],
@@ -69,7 +69,7 @@ for L in [10, 12, 14, 16, 18, 20, 22, 24]
     lattice = Lattice(L,L)
     indexc=Int((L-1)*L) #Comparison index of the bond
     Cmat=Cdict[L]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
+    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly), [])
     plot!(p,
     [((r, C) = Cbulk_r(Cmat, bc, 2*Δq+1); (r, log10(abs(C))))
      for Δq in 0:Int(L÷2)+3], #L/2-1 cuts off before they go into noise/finite-size effects.
@@ -91,7 +91,7 @@ for L in [10, 12, 14, 16, 18, 20, 22, 24]
     lattice = Lattice(L,L)
     indexc=Int((L-1)*L) #Comparison index of the bond
     Cmat=Cdict[L]
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
+    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly), [])
     scatter!(p,
     [((r, C) = Cbulk_r(Cmat, bc, Δq); (r, log10(abs(C))))
      for Δq in 1:L-1],
@@ -114,7 +114,7 @@ lattice = Lattice(L,L)
 indexc=Int((L-1)*L) #Comparison index of the bond
 
 Cmat=Cdict[L]
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
+bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly), [])
 p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cmat[:,indexc])); clim=(-6,1.05))
 display(p)
 p = plot_bond_corr_realspace_signlogshade(bc, indexc, Cmat[indexc,:]; eps_mag=1e-12, γ=1.0, vmin=0.01, vmax=4)

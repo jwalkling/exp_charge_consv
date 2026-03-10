@@ -29,6 +29,17 @@ struct Bonds
     max_bond::Int #Maximum allowed bond value (symmetric range [-max_bond, max_bond])
     bond::Vector{Int} #Vector to store the values of each bond
     charges::Vector{Int} #Vector to store the charges at each vertex
+    allowed_bonds::Vector{Int} #Vector to store the allowed bonds (for OBC)
+end
+
+function construct_bonds(lattice::Lattice, max_bond::Int)
+    Lx = lattice.Lx
+    Ly = lattice.Ly
+    Nsites = Lx * Ly
+    bond_vector = zeros(Int, 2 * Nsites) # 2 bonds per site (x and y)
+    charge_vector = zeros(Int, Nsites)     # 1 charge per site
+    allowed_bonds = allowed_bonds_OBC(lattice) # Precompute allowed bonds for OBC
+    return Bonds(lattice, max_bond, bond_vector, charge_vector, allowed_bonds)
 end
 
 """
@@ -59,6 +70,30 @@ No global bound check; only the geometric edge checks.
 
     # If you ever pass any other step, treat as invalid
     return false
+end
+
+function allowed_bonds_OBC(lat::Lattice)
+    Lx=lat.Lx
+    Ly=lat.Ly
+
+    bonds_allowed = Int[]
+    sizehint!(bonds_allowed, 2Lx*Ly - Lx - Ly)  # preallocate for all bonds except those dangling off the right and top edges
+
+    for s in 1:(Lx*Ly)
+        x = ((s - 1) % Lx) + 1
+        y = ((s - 1) ÷ Lx) + 1
+
+        hb = 2s - 1
+        vb = 2s
+
+        if x < Lx
+            push!(bonds_allowed, hb)
+        end
+        if y < Ly
+            push!(bonds_allowed, vb)
+        end
+    end
+    return bonds_allowed
 end
 
 # Function to convert index to coordinate of centre of link
@@ -346,6 +381,56 @@ function MC_T_worm!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{F
     end
 end
 
+function MC_T_flip!(bond_config::Bonds, rng::AbstractRNG, allowed_bonds::Vector{Int}, beta::Float64)
+    lat     = bond_config.lattice
+    charges = bond_config.charges
+    Lx      = lat.Lx
+    Ly      = lat.Ly
+    N       = bond_config.max_bond
+
+    #Pick a random bond to flip. Use allowed_bonds since OBC
+    bond_0 = rand(rng, allowed_bonds)
+    
+
+    #±1 sufficient for detailed balance for single spin flips.
+    δB_0 = rand(rng, Bool) ? 1 : -1
+
+
+    bond_config.bond[bond_0] += δB_0
+
+    #Reject if the bond value goes out of bounds
+    if abs(bond_config.bond[bond_0]) > N
+        bond_config.bond[bond_0] -= δB_0 #undo change
+        return
+    end
+
+    #TK CAN BE CACHED LATER FOR SPEED
+    if bond_0 isodd
+        #Horizontal bond: affects charges of the two vertices it connects
+        i1 = (bond_0 + 1) ÷ 2
+        i2 = i1 + 1
+    else # for vertical (even bonds)
+        #Vertical bond: affects charges of the two vertices it connects
+        i1 = bond_0 ÷ 2
+        i2 = i1 + lat.Lx
+    end
+
+    #Calculate new charges and energies
+    q1i=charges[i1]
+    q2i=charges[i2]
+
+    q1_new = q1i+ δB_0
+    q2_new = q2i -2*δB_0
+
+    if exp(-beta*(q1_new*q1_new + q2_new*q2_new - q1i*q1i - q2i*q2i)) < rand(rng)
+        #Reject move, undo change
+        bond_config.bond[bond_0] -= δB_0
+    else
+        #Accept move, update charges
+        charges[i1] = q1_new
+        charges[i2] = q2_new
+    end
+end
 
 #-------------------------
 # Measurements
