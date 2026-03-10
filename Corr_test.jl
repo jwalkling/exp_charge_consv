@@ -6,11 +6,11 @@ Created: 28.01.2026
 include("/Users/jamwalk/Desktop/Research/Roderich/Discrete CSL/exp_charge_consv/ecc_func.jl")
 
 
-#TK OTHER ONLY SET UP TO WORK FOR 2L-2 increment since we relate them with ±1
+
 """
     paired_diagonal_bonds(indexc::Int; inc::Int, max_index::Int)
 
-Return two vectors of bond indices along the line obtained by stepping ±inc:
+Return two vectors of bond indices along the line x=-y
 - `same`: indices with the same orientation (parity) as `indexc`
 - `other`: paired indices with opposite orientation (index±1)
 
@@ -56,6 +56,7 @@ function paired_diagonal_bonds_xym(indexc::Int; max_index::Int)
     return same, other
 end
 
+
 function paired_bonds(indexc::Int; inc::Int, max_index::Int)
     same  = Int[]
 
@@ -94,7 +95,7 @@ end
 L=8
 N=2
 lattice = Lattice(L,L)
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+bc = construct_bonds(lattice, N)
 rng = MersenneTwister(1234)
 δB_0s=δB_0_tuple(bond_config)
 
@@ -231,10 +232,10 @@ for N in Ns
     L=20
     lattice = Lattice(L,L)
     indexc=Int((L-1)*L) #Comparison index of the bond
-    bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
+    bc = construct_bonds(lattice, N)
 
     Cbonds=Cdict[N][indexc, :]
-    p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cbonds)); clim=(-4,1.05), shrink=0.3, title="Bond–bond correlator map for N=2, L=20, it=10^9")
+    p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cbonds)); clim=(-4,1.05), shrink=0.3, title="Bond–bond correlator map for N=$(N), L=20, it=10^9")
     display(p)
     savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_L20_it1e9.png"))
 end
@@ -254,7 +255,7 @@ same, other = paired_diagonal_bonds_xym(indexc; max_index=2L*L)
 
 
 N=2
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
+bc = construct_bonds(lattice, N)
 
 Cbonds=Cdict[N][indexc, :]
 
@@ -274,7 +275,7 @@ display(p)
 savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag-.png"))
 
 N=20
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
+bc = construct_bonds(lattice, N)
 
 Cbonds=Cdict[N][indexc, :]
 
@@ -306,7 +307,7 @@ same = paired_bonds(indexc; inc=2*L+2, max_index=2L*L)
 
 
 N=2
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
+bc = construct_bonds(lattice, N)
 
 Cbonds=Cdict[N][indexc, :]
 
@@ -325,7 +326,7 @@ savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))
 
 
 N=20
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly),zeros(Int, lattice.Lx*lattice.Ly))
+bc = construct_bonds(lattice, N)
 
 Cbonds=Cdict[N][indexc, :]
 

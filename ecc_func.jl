@@ -381,9 +381,10 @@ function MC_T_worm!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{F
     end
 end
 
-function MC_T_flip!(bond_config::Bonds, rng::AbstractRNG, allowed_bonds::Vector{Int}, beta::Float64)
+function MC_T_flip!(bond_config::Bonds, rng::AbstractRNG, beta::Float64)
     lat     = bond_config.lattice
     charges = bond_config.charges
+    allowed_bonds = bond_config.allowed_bonds
     Lx      = lat.Lx
     Ly      = lat.Ly
     N       = bond_config.max_bond
@@ -405,7 +406,7 @@ function MC_T_flip!(bond_config::Bonds, rng::AbstractRNG, allowed_bonds::Vector{
     end
 
     #TK CAN BE CACHED LATER FOR SPEED
-    if bond_0 isodd
+    if isodd(bond_0)
         #Horizontal bond: affects charges of the two vertices it connects
         i1 = (bond_0 + 1) ÷ 2
         i2 = i1 + 1
