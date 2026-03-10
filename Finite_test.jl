@@ -8,106 +8,6 @@ using DataFrames
 using CSV
 using Printf
 using Colors
-"""
-    bond_corr_matrix_thermal!(
-        bc::Bonds,
-        rng::AbstractRNG;
-        connected::Bool = false,
-        burnin::Int = 1_000,
-        nsamples::Int = 2_000,
-        thin::Int = 10,
-        mc_step! = MC_T0_loop!,
-    ) -> meanC::Matrix{Float64}, Cstderr::Matrix{Float64}
-
-Compute the full bond–bond correlator matrix
-
-    C[b1, b2] = ⟨ s[b1] s[b2] ⟩                    (connected=false)
-    C[b1, b2] = ⟨ (s[b1]-μ)(s[b2]-μ) ⟩            (connected=true)
-
-where μ = average bond value in the *current* configuration (per sample),
-matching your existing estimator logic.
-
-Returns:
-- `meanC`: Nb×Nb matrix of correlator means
-- `Cstderr`: Nb×Nb matrix of standard errors (NaN if nsamples ≤ 1)
-
-Notes:
-- This is O(Nb^2) memory and O(nsamples * Nb^2) work. For large lattices, this will be heavy.
-- Uses only the upper triangle during accumulation, then mirrors to enforce symmetry.
-"""
-function bond_corr_matrix_thermal!(
-    bc::Bonds,
-    rng::AbstractRNG;
-    connected::Bool = false,
-    burnin::Int = 1_000,
-    nsamples::Int = 2_000,
-    thin::Int = 10,
-    mc_step! = MC_T0_loop!,
-)
-    b = bc.bond
-    Nb = length(b)
-
-    δB_0s = δB_0_tuple(bc)
-
-    @inbounds for _ in 1:burnin
-        mc_step!(bc, rng, δB_0s)
-    end
-
-    meanC = zeros(Float64, Nb, Nb)  # store full for convenience; update only upper triangle
-    M2C   = zeros(Float64, Nb, Nb)
-
-    # work buffer for centered/un-centered bond values
-    v = Vector{Float64}(undef, Nb)
-
-    @inbounds for s in 1:nsamples
-        for _ in 1:thin
-            mc_step!(bc, rng, δB_0s)
-        end
-
-        if connected
-            μ = sum(b) / Nb
-            @inbounds for i in 1:Nb
-                v[i] = b[i] - μ
-            end
-        else
-            @inbounds for i in 1:Nb
-                v[i] = b[i]
-            end
-        end
-
-        # Welford update, upper triangle only (symmetry)
-        @inbounds for j in 1:Nb
-            vj = v[j]
-            for i in 1:j
-                Cij = v[i] * vj
-                δ   = Cij - meanC[i, j]
-                meanC[i, j] += δ / s
-                M2C[i, j]   += δ * (Cij - meanC[i, j])
-            end
-        end
-    end
-
-    # standard error
-    Cstderr = fill(NaN, Nb, Nb)
-    if nsamples > 1
-        @inbounds for j in 1:Nb
-            for i in 1:j
-                Cstderr[i, j] = sqrt((M2C[i, j] / (nsamples - 1)) / nsamples)
-            end
-        end
-    end
-
-    # mirror to lower triangle (enforce exact symmetry)
-    @inbounds for j in 1:Nb
-        for i in 1:j-1
-            meanC[j, i]   = meanC[i, j]
-            Cstderr[j, i] = Cstderr[i, j]
-        end
-    end
-
-    return meanC, Cstderr
-end
-
 
 #-----------------------------
 # Import Data
@@ -137,49 +37,6 @@ end
 #-----------------------------------
 # Bulk pair-averaged correlator
 #-----------------------------------
-function Cbulk_r(Cmat, bc, shift::Int)
-    lat= bc.lattice
-    Lx, Ly = lat.Lx, lat.Ly
-    Nbonds = 2*Lx * Ly
-    total = 0.0
-    count = 0
-    stored_dr = false
-    dr=0
-
-    for i in 1:Nbonds
-        (x0,y0) = index_to_coord(lat, i)
-        (x1,y1) = index_to_coord(lat, i+shift)
-        dx = x1 - x0
-        dy = y1 - y0
-        if dx < 0 || dy < 0 || dx >= Lx || dy >= Ly
-            continue
-        end
-        if stored_dr == false
-            dr=sqrt(dx^2+dy^2)
-            stored_dr = true
-        end
-        #println(dx^2+dy^2)
-        value=Cmat[i, i+shift]
-        if value == 0.0 # Ignore the zero values corresponding to the "dead" bonds used for PBC.
-            continue
-        end
-        total+=Cmat[i, i+shift] #TK stop the bonds where they go out of bounds.
-        count+=1
-    end
-    return (dr,count > 0 ? total / count : NaN)
-end
-
-L=14
-N=2
-lattice = Lattice(L,L)
-indexc=Int((L-1)*L) #Comparison index of the bond
-Cmat=Cdict[L]
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
-plot(log10.(abs.(bulk_pair_mean_r(Cmat, lattice, 10; margin=1)[2])))
-xlims!(2,10)
-
-
-
 #The labelling means bonds alternate between vert and horizont (A vs. B sublattice)
 plotname="ECC_bulkC_T=0"
 # First plot: A-A sublattice correlations
@@ -249,7 +106,7 @@ title!(p, "⟨C(Δr,0)⟩_bulk in x-direction for all points")
 display(p)
 savefig(p, joinpath(homedir(), "Downloads", plotname*"_all.png"))
 #-----------------------------------
-# Bond-Bond Correlator in Real Space
+# Antiquated plots of real-space correlators
 #-----------------------------------
 L=22
 N=2
@@ -257,7 +114,7 @@ lattice = Lattice(L,L)
 indexc=Int((L-1)*L) #Comparison index of the bond
 
 Cmat=Cdict[L]
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly))
+bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
 p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cmat[:,indexc])); clim=(-6,1.05))
 display(p)
 p = plot_bond_corr_realspace_signlogshade(bc, indexc, Cmat[indexc,:]; eps_mag=1e-12, γ=1.0, vmin=0.01, vmax=4)
@@ -275,52 +132,6 @@ rng = MersenneTwister(1234)
 
 
 indexc=Int((L-1)*L) #Comparison index of the bond
-
-function bond_corr_realspace_thermal!(
-    bc::Bonds,
-    rng::AbstractRNG,
-    b0::Int;
-    connected::Bool = false,
-    burnin::Int = 1_000,
-    nsamples::Int = 2_000,
-    thin::Int = 10,
-    mc_step! = MC_T0_loop!,
-)
-    b = bc.bond
-    (1 <= b0 <= length(b)) || throw(ArgumentError("b0 must satisfy 1 ≤ b0 ≤ length(bc.bond)"))
-
-    δB_0s = δB_0_tuple(bc)
-
-    @inbounds for _ in 1:burnin
-        mc_step!(bc, rng, δB_0s)
-    end
-
-    meanC = zeros(Float64, length(b))
-    M2C   = zeros(Float64, length(b))
-
-    @inbounds for s in 1:nsamples
-        for _ in 1:thin
-            mc_step!(bc, rng, δB_0s)
-        end
-
-        s0 = b[b0]
-        μ  = connected ? (sum(b) / length(b)) : 0.0
-
-        @inbounds for bi in eachindex(b)
-            C = connected ? (s0 - μ) * (b[bi] - μ) : (s0 * b[bi])
-            δ = C - meanC[bi]
-            meanC[bi] += δ / s
-            M2C[bi]   += δ * (C - meanC[bi])
-        end
-    end
-
-    Cstderr = fill(NaN, length(b))
-    if nsamples > 1
-        @inbounds Cstderr .= sqrt.((M2C ./ (nsamples - 1)) ./ nsamples)
-    end
-
-    return meanC, Cstderr
-end
 
 function plot_bond_corr_realspace(
     bc::Bonds,
@@ -524,33 +335,6 @@ function plot_bond_corr_realspace_signlogshade(
 
     return p
 end
-
-
-Cb, dCb = bond_corr_realspace_thermal!(bc, rng, indexc;
-    connected=true, burnin=1_000, nsamples=100_000_000, thin=20)
-
-p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cb)); clim=(-4,1.05))
-display(p)
-
-dmax = 6
-Cmean, Cstderr, npairs = bond_bond_corr_thermal_grid_fast!(bc, rng, dmax;
-    orientation = :both,
-    connected   = false,
-    burnin      = 1_000,
-    nsamples    = 900_000,
-    thin        = 20,
-    mc_step!    = MC_T0_loop!,
-)
-
-# dy=0 cut:
-Cs = @view Cmean[:, 1]
-plot(0:dmax, log10.(abs.(Cs)); xlabel="dx", ylabel="C(dx,0)", title="Bond-Bond Correlator Cut (dy=0)")
-
-
-rs, Cr, dCr, nr = radialize_corr(Cmean, Cstderr; dmax=dmax)
-p=plot(rs, log10.(abs.(Cr) .+ eps(Float64)); marker=:circle, xlabel="r", ylabel="log10|C(r)|", label="")
-xlims!(p, (0, dmax))
-display(p)
 
 
 

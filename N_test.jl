@@ -73,7 +73,7 @@ end
 # Import Data
 #-----------------------------
 #The data is taken for fixed L=20 to see how correlations scale with N
-Ns = [2,6,10,14,20]
+Ns = [2,10,20]#[2,6,10,14,20]
 Cdict  = Dict{Int, Matrix{Float64}}()
 directory = "../ECC_data/T=0/Bond_C_Ns/it=10^7L=20/"
 
@@ -110,7 +110,8 @@ for N in Ns
 
     plot!(p, rs, ys; marker=:circle, ms=3, label="N=$N")
 end
-
+display(p)
+#xlims!(p,0, 20)
 finish_plot!(
     p;
     xlabel_str="Δr (bond midpoint grid)",
