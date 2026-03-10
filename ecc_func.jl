@@ -319,52 +319,6 @@ function MC_T0_loop!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{
     end
 end
 
-function MC_T0_loop_cutoff!(bond_config::Bonds, rng::AbstractRNG, δB_0s::Tuple{Vararg{Float64}}, cutoff::Int)
-    lat    = bond_config.lattice
-    Lx     = lat.Lx
-    Ly     = lat.Ly
-    Nsites = Lx * Ly
-
-    #Extra variables to implement cutoff
-    l=0 #Loop length
-    initial_config = copy(bond_config.bond) # Store initial configuration for potential rollback
-
-    #Now normal code begins
-    index_0 = rand(rng, 1:Nsites)
-
-    δB_0    = rand(rng, δB_0s)
-    δB_prev = δB_0
-
-    move_0 = allowed_step_first(δB_0, bond_config, index_0, rng)
-    if move_0 == 0
-        return
-    end
-
-    # apply first move
-    index_prev = index_0
-    index_curr = index_0 + move_0
-
-    bond0 = step_bond(index_prev, move_0)
-    bond_config.bond[bond0] += δB_prev
-
-    while index_curr != index_0
-        l+=1
-        if l > cutoff
-            bond_config.bond .= initial_config # Rollback to initial configuration
-            return
-        end
-        step, bond, δB_curr = allowed_step(δB_prev, bond_config, rng, index_curr, index_prev)
-
-        index_prev = index_curr
-        index_curr = index_curr + step
-
-        bond_config.bond[bond] += δB_curr
-        δB_prev = δB_curr
-    end
-end
-
-
-
 @inline charge_factor(Δ::Int) = ifelse(Δ > 0, -2, 1)
 
 
