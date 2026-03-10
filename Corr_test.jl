@@ -342,6 +342,233 @@ ylims!(p, 10^(-6), 10^(-1))
 display(p)
 savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))
 
+
+
+#--------------------------------
+# Testing loop length cutoff
+#--------------------------------
+
+L=10
+N=4
+
+lattice = Lattice(L,L)
+bc = construct_bonds(lattice, N)
+
+rng = MersenneTwister(1234)
+δB_0s=δB_0_tuple(bc)
+
+m=10^6
+
+#Time the code without the cutoff to run m loops
+t1=time()
+bc = construct_bonds(lattice, N)
+for i in 1:m
+    MC_T0_loop!(bc, rng, δB_0s)
+end
+
+#Time the code with a cutoff of L to run m loops
+t2=time()
+bc = construct_bonds(lattice, N)
+for i in 1:m
+    MC_T0_loop_cutoff!(bc, rng, δB_0s, L)
+end
+t3=time()
+println("Time without cutoff: ", t2-t1, " seconds")
+println("Time with cutoff: ", t3-t2, " seconds")
+
+
+using Random
+using Statistics
+using LinearAlgebra
+using Plots
+
+# ============================================================
+# settings
+# ============================================================
+
+L = 10
+N = 4
+lattice = Lattice(L, L)
+
+ms = unique(round.(Int, 10 .^ range(1, 5; length=12)))   # up to 10^4
+rngseed = 1234
+time_budget = 1.0   # seconds for convergence test
+
+# ============================================================
+# helper: runtime scan
+# ============================================================
+
+function runtime_scan(ms; L=10, N=4, rngseed=1234)
+    lattice = Lattice(L, L)
+
+    times_plain  = zeros(Float64, length(ms))
+    times_cutoff = zeros(Float64, length(ms))
+
+    for (k, m) in enumerate(ms)
+
+        # plain
+        rng = MersenneTwister(rngseed)
+        bc = construct_bonds(lattice, N)
+        δB_0s = δB_0_tuple(bc)
+
+        t1 = time()
+        @inbounds for _ in 1:m
+            MC_T0_loop!(bc, rng, δB_0s)
+        end
+        times_plain[k] = time() - t1
+
+        # cutoff
+        rng = MersenneTwister(rngseed)
+        bc = construct_bonds(lattice, N)
+        δB_0s = δB_0_tuple(bc)
+
+        t2 = time()
+        @inbounds for _ in 1:m
+            MC_T0_loop_cutoff!(bc, rng, δB_0s, L)
+        end
+        times_cutoff[k] = time() - t2
+    end
+
+    return times_plain, times_cutoff
+end
+
+# ============================================================
+# helper: convergence of running bond average to zero
+# ============================================================
+
+"""
+Run for approximately `time_budget` seconds.
+After each MC step, update the cumulative bond sum:
+
+    running_sum += bc.bond
+
+and measure closeness of the running average to zero via
+
+    sum(abs.(running_sum / nsteps))
+
+Returns:
+- closeness trace
+- number of steps performed
+"""
+function convergence_fixed_time_plain(; L=10, N=4, rngseed=1234, time_budget=1.0)
+    lattice = Lattice(L, L)
+    rng = MersenneTwister(rngseed)
+
+    bc = construct_bonds(lattice, N)
+    δB_0s = δB_0_tuple(bc)
+
+    running_sum = zeros(Float64, length(bc.bond))
+    closeness = Float64[]
+
+    nsteps = 0
+    t0 = time()
+    while (time() - t0) < time_budget
+        MC_T0_loop!(bc, rng, δB_0s)
+        nsteps += 1
+
+        running_sum .+= bc.bond
+        push!(closeness, sum(abs.(running_sum)) / nsteps)   # L1 norm of running average
+    end
+
+    return closeness, nsteps
+end
+
+
+function convergence_fixed_time_cutoff(; L=10, N=4, rngseed=1234, time_budget=1.0)
+    lattice = Lattice(L, L)
+    rng = MersenneTwister(rngseed)
+
+    bc = construct_bonds(lattice, N)
+    δB_0s = δB_0_tuple(bc)
+
+    running_sum = zeros(Float64, length(bc.bond))
+    closeness = Float64[]
+
+    nsteps = 0
+    t0 = time()
+    while (time() - t0) < time_budget
+        MC_T0_loop_cutoff!(bc, rng, δB_0s, L)
+        nsteps += 1
+
+        running_sum .+= bc.bond
+        push!(closeness, sum(abs.(running_sum)) / nsteps)   # L1 norm of running average
+    end
+
+    return closeness, nsteps
+end
+
+# ============================================================
+# 1. runtime scaling
+# ============================================================
+
+times_plain, times_cutoff = runtime_scan(ms; L=L, N=N, rngseed=rngseed)
+
+p1 = plot(
+    ms, times_plain;
+    xscale = :log10,
+    yscale = :log10,
+    marker = :circle,
+    lw = 2,
+    xlabel = "m",
+    ylabel = "runtime (s)",
+    label = "MC_T0_loop!",
+    title = "Runtime scaling"
+)
+
+plot!(
+    p1,
+    ms, times_cutoff;
+    marker = :square,
+    lw = 2,
+    label = "MC_T0_loop_cutoff!"
+)
+
+display(p1)
+
+println("Runtime scan:")
+for i in eachindex(ms)
+    println("m = $(ms[i]): plain = $(times_plain[i]) s, cutoff = $(times_cutoff[i]) s, speedup = $(times_plain[i] / times_cutoff[i])")
+end
+
+# ============================================================
+# 2. convergence over fixed runtime
+# ============================================================
+
+closeness_plain, n_plain = convergence_fixed_time_plain(; L=L, N=N, rngseed=rngseed, time_budget=time_budget)
+closeness_cutoff, n_cutoff = convergence_fixed_time_cutoff(; L=L, N=N, rngseed=rngseed, time_budget=time_budget)
+
+p2 = plot(
+    1:length(closeness_plain), log10.(closeness_plain);
+    lw = 2,
+    xlabel = "MC step",
+    ylabel = "sum(abs.(running average of bc.bond))",
+    label = "MC_T0_loop!",
+    title = "Convergence to zero over fixed wall-clock time = $(time_budget) s"
+)
+
+plot!(
+    p2,
+    1:length(closeness_cutoff), log10.(closeness_cutoff);
+    lw = 2,
+    label = "MC_T0_loop_cutoff!"
+)
+
+display(p2)
+
+println("\nConvergence test:")
+println("plain steps performed  = $n_plain")
+println("cutoff steps performed = $n_cutoff")
+println("final closeness plain  = $(closeness_plain[end])")
+println("final closeness cutoff = $(closeness_cutoff[end])")
+
+
+
+
+
+
+
+
+
 #-------------------------------
 # Testing the coordinates function
 #-------------------------------
