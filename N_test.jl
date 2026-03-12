@@ -69,7 +69,7 @@ end
 #The data is taken for fixed L=20 to see how correlations scale with N
 Ns = [2,10,20]#[2,6,10,14,20]
 Cdict  = Dict{Int, Matrix{Float64}}()
-directory = "../ECC_data/T=0/Bond_C_Ns/it=10^9L=20/"
+directory = "../ECC_data/T=0/Bond_C_Ns/it=10^11L=20/"
 
 for N in Ns
     Cfile  = joinpath(directory, "Cmat_N$(N).csv")
@@ -133,16 +133,17 @@ for N in Ns
     )
 end
 
-Cxx_asymp(r) = r == 0.0 ? NaN : 0.005 * sqrt(r) * exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
+#Cxx_asymp(r) = r == 0.0 ? NaN : 0.004 *sqrt(r)* exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
+Cxx_asymp(r) = r == 0.0 ? NaN : 0.01 * exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
 rgrid = collect(range(2.0, stop=10, length=400))
-plot!(p, rgrid, log10.(abs.(Cxx_asymp.(rgrid))); lw=2, ls=:dash, label="asymp ∝ r K₁(r)")
+plot!(p, rgrid, log10.(abs.(Cxx_asymp.(rgrid))); lw=2, ls=:dash, label="asymp ∝ exp(-r)") #r K₁(r)
 
 finish_plot!(
     p;
     xlabel_str="Δr (bond midpoint grid)",
     ylabel_str="log10 ⟨C(Δr,0)⟩_bulk",
     title_str="⟨C(Δr,0)⟩_bulk in x-direction for A-A sublattices",
-    ylims_tuple=(-5.5, -1.5),
+    ylims_tuple=(-6.5, -1.5),
     savepath=joinpath(homedir(), "Downloads", plotname * "_AA.png"),
 )
 
