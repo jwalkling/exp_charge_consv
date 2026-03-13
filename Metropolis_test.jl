@@ -9,6 +9,47 @@ using CSV
 using Printf
 using Colors
 
+betas = [1.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+ratios = [1,10,100,1000] 
+directory = "../ECC_data/T>0/Metro_Test/3x3/Maxcutoffbeta1.0/"
+
+#Data for just plotting the line Eestimate=E
+reddata=[0,2,6,8,10,16,20]
+
+i=1
+for j in 3:4
+    filename  = joinpath(directory, "metro_data$(betas[i])_$(ratios[j]).csv")
+    df = CSV.read(filename, DataFrame)
+    beta=betas[i]
+    energies = df.energy
+    counts = df.count
+
+    #factor=10^2
+    #energies,counts = thindata_random_bernoulli(energies, counts,factor)
+    p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="-log(p)/beta", legend=false)
+    xlims!(p2,0,20)
+    ylims!(p2,0,20)
+    plot!(p2,reddata,reddata, c=:red, label="E=ΔF line")
+    title!(p2, "E (red) vs. Estimate [beta=$beta for 3x3 w/ Ratio=$(ratios[j])]")
+    display(p2)
+end
+
+
+filename  = joinpath(directory, "dist_data1.0_10.csv")
+df = CSV.read(filename, DataFrame)
+beta=1.0
+energies = df.energy
+counts = df.count
+p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="-log(p)/beta", legend=false)
+xlims!(p2,0,10)
+ylims!(p2,0,10)
+
+
+
+
+
+
+
 L=2
 N=2
 beta=2.0

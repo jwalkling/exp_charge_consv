@@ -25,7 +25,7 @@ max_bond::Int -> bond can take integer values -max_bond, ..., max_bond
 bond::Vector{Int} -> A vector of all the different values on the bonds
 """
 struct Bonds
-    lattice::Lattice #Lattice struct for dimensions
+    lattice::Lattice #Lattice struct for dimensions and geometry
     max_bond::Int #Maximum allowed bond value (symmetric range [-max_bond, max_bond])
     bond::Vector{Int} #Vector to store the values of each bond
     charges::Vector{Int} #Vector to store the charges at each vertex
