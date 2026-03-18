@@ -254,15 +254,10 @@ Backtracking is allowed.
     Δ_prev = index_curr - index_prev
     bonds  = bond_config.bond
 
-    # no allocation
-    steps = (-1, 1, -Lx, Lx)
+    steps = [-1, 1, -Lx, Lx]
+    shuffle!(rng, steps)
 
-    # random starting offset gives unbiased random order
-    k0 = rand(rng, 0:3)
-
-    @inbounds for t = 0:3
-        step = steps[mod1(k0 + t + 1, 4)]
-
+    @inbounds for step in steps
         # backtracking allowed
         if step == -Δ_prev
             bond = step_bond(index_curr, step)

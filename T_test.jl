@@ -653,11 +653,10 @@ rng = MersenneTwister(1234)
 δB_0s=δB_0_tuple(bc)
 
 # Example usage:
-rng = MersenneTwister(1234)
 trans, visits, diffs, states = test_detailed_balance_loop!(
     bc, rng;
     burnin=10_000,
-    nsteps=10_000_000,
+    nsteps=1000_000_000,
     min_pair_count=50,
     topk=20,
     mc_step! = MC_T0_loop!
