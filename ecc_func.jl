@@ -38,7 +38,7 @@ function construct_bonds(lattice::Lattice, max_bond::Int)
     Nsites = Lx * Ly
     bond_vector = zeros(Int, 2 * Nsites) # 2 bonds per site (x and y)
     charge_vector = zeros(Int, Nsites)     # 1 charge per site
-    allowed_bonds = allowed_bonds_OBC(lattice) # Precompute allowed bonds for OBC
+    allowed_bonds = allowed_bonds_OBC(lattice) # Precompute allowed bonds for OBC. Needed for Metropolis.
     return Bonds(lattice, max_bond, bond_vector, charge_vector, allowed_bonds)
 end
 
@@ -157,8 +157,7 @@ end
 @inline idx(lat::Lattice, x::Int, y::Int) = (y-1)*lat.Lx + x
 
 """
-step_bond: label for bond between index_curr and index_curr+step.
-Assumes step is a nearest-neighbour step (±1 or ±Lx); caller enforces.
+step_bond: label for the bond that we walk through with step from index_curr
 """
 @inline function step_bond(index_curr::Int, step::Int)::Int
     # i = min(index_curr, index_curr + step)
@@ -173,7 +172,7 @@ end
 
 
 """
-step_bond: label for bond between index_curr and index_next.
+bond_label: label for bond between index_curr and index_next.
 Assumes step is a nearest-neighbour step (±1 or ±Lx); caller enforces.
 """
 @inline function bond_label(index_curr::Int, index_next::Int)::Int

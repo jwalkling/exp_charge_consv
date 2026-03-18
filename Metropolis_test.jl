@@ -45,9 +45,26 @@ xlims!(p2,0,10)
 ylims!(p2,0,10)
 
 
+#Study the distribution of states at a given energy
+i=1
+j=4
 
+E=20
+filename  = joinpath(directory, "metro_data$(betas[i])_$(ratios[j]).csv")
+df = CSV.read(filename, DataFrame)
+beta=betas[i]
+energies = df.energy
+counts = df.count
 
+counts_E = []
 
+for k in 1:length(energies)
+    if energies[k] == E
+        push!(counts_E, counts[k])
+    end
+end 
+histogram(counts_E, nbins=50, xlabel="Count", 
+ylabel="Frequency", title="Histogram of counts for energy E=$(E) at beta=$(beta)")
 
 
 L=2

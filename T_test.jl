@@ -147,42 +147,6 @@ p=scatter(energies,log10.(counts))
 xlims!(p,0,5)
 
 
-
-
-
-
-# Single beta and study distribution
-L=3
-N=2
-lattice = Lattice(L,L)
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly)) #Initialize charges to zero
-rng = MersenneTwister()#MersenneTwister(1234)
-δB_0s=δB_0_tuple(bc)
-
-beta=0.01 #0.01#log(4)/5#log(4)/5
-iterations=10^6 #10^8
-#Store counts in a dictionary
-dict=Dict{Vector, Int64}()
-
-for i in 1:iterations
-    #bonds_0=copy(bond_config.bond)
-    MC_T_worm!(bc, rng, δB_0s, beta, exp(beta*50))
-    # if bond_config.bond == bonds_0
-    #     continue
-    # end
-    dict[copy(bc.bond)] = get(dict, copy(bc.bond), 0) + 1
-end
-#Find the energies
-energies = zeros(Float64, length(keys(dict)))
-bonds = collect(keys(dict))               # make a stable indexable list
-counts = Float64.(collect(values(dict)))  # z-values for scatter
-
-for (i, bond) in enumerate(bonds)
-    bc = Bonds(lattice, N, bond, zeros(Int, lattice.Lx * lattice.Ly))
-    energies[i] = sum(vertex_charges(bc).^2)
-end
-
-
 #Import the locally stored data
 #Parameters
 Ecutoffs = [20, 10, 5, 20, 10, 5]
@@ -228,16 +192,525 @@ sorted_configs = sort(collect(dict), by=x->x[2], rev=true)
 top_configs = sorted_configs[1:10]
 for (config, count) in top_configs
     println("Config: ", config, " Count: ", count)
-    bc = Bonds(lattice, N, config, zeros(Int, lattice.Lx*lattice.Ly))
+    bc = Bonds(lattice, N, config, zeros(Int, lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
     # p=plot_bondsnv(bc)
     # title!(p, "Config with count: $count")
     # display(p)
 end
 
 
+
+
+
+
+# Single beta and study distribution
+L=3
+N=2
+lattice = Lattice(L,L)
+bc = construct_bonds(lattice,N) #Initialize charges to zero
+rng = MersenneTwister()#MersenneTwister(1234)
+δB_0s=δB_0_tuple(bc)
+
+beta=0.01 #0.01#log(4)/5#log(4)/5
+iterations=10^6 #10^8
+#Store counts in a dictionary
+dict=Dict{Vector, Int64}()
+
+for i in 1:iterations
+    #bonds_0=copy(bond_config.bond)
+    MC_T_worm!(bc, rng, δB_0s, beta, exp(beta*32*N^2))
+    # if bond_config.bond == bonds_0
+    #     continue
+    # end
+    dict[copy(bc.bond)] = get(dict, copy(bc.bond), 0) + 1
+end
+#Find the energies
+energies = zeros(Float64, length(keys(dict)))
+bonds = collect(keys(dict))               # make a stable indexable list
+counts = Float64.(collect(values(dict)))  # z-values for scatter
+
+for (i, bond) in enumerate(bonds)
+    bc = construct_bonds(lattice, N)
+    energies[i] = sum(vertex_charges(bc).^2)
+end
+
+
+
+
+#Testing each part of the code
+lattice=Lattice(3,3)
+N=2
+bond_config=construct_bonds(lattice, N) # initialize the bond structure
+rng=MersenneTwister(1234)
+
+in_bounds(2,1,lattice)
+
+bond_label(5,6) #just returns the bond label
+
+multiplier(-1,2)
+δB_0_tuple(bond_config)
+
+v=[]
+for i in 1:1000
+    push!(v, allowed_step_first(1.0, bond_config, 5, rng))
+end
+histogram(v, nbins=3, xlabel="Allowed Step", ylabel="Frequency", title="Histogram of Allowed Steps")
+
+
+
+
+
+"""
+    test_detailed_balance_uniform!(
+        bond_config,
+        rng::AbstractRNG;
+        burnin::Int = 10_000,
+        nsteps::Int = 200_000,
+        min_pair_count::Int = 50,
+        topk::Int = 20,
+        store_states::Bool = true,
+        mc_step! = MC_T0_loop!
+    )
+
+Detailed-balance diagnostic for a Markov chain whose stationary distribution is *uniform*
+over configurations (all visited states are assumed degenerate).
+
+Correct DB condition for uniform π is:
+    P(a->b) = P(b->a)
+Empirically:
+    N_ab / visits[a]  ≈  N_ba / visits[b]
+
+This function:
+- keys states by *contents* using Tuple(bond_config.bond)
+- records directed transition counts N_ab and visit counts
+- reports the worst symmetry violations by relative difference in transition probabilities
+
+Returns:
+    trans, visits, diffs, states
+
+where diffs entries are tuples:
+    (relprob, total, a, b, nab, nba, pab, pba, flux_rel)
+"""
+lattice=Lattice(3,3)
+N=2 #max_bond value
+bond_config=construct_bonds(lattice, N) # initialize the bond structure
+
+function test_detailed_balance_uniform!(
+    bond_config,
+    rng::AbstractRNG;
+    burnin::Int = 10_000,
+    nsteps::Int = 200_000,
+    min_pair_count::Int = 50,
+    topk::Int = 20,
+    store_states::Bool = true,
+    mc_step! = MC_T0_loop!
+)
+    δB_0s=δB_0_tuple(bond_config) # Precompute δB_0s for worm updates (not needed for T=0 loop)
+    # Content-based immutable key (diagnostic-safe; allocates)
+    statekey() = Tuple(bond_config.bond)
+
+    # Directed transition counts: (a,b) -> N_ab
+    trans  = Dict{Tuple{Any,Any}, Int}()
+    visits = Dict{Any, Int}()
+
+    # Optional snapshots for printing
+    states = Dict{Any, Any}()
+
+    # Burn-in
+    for _ in 1:burnin
+        mc_step!(bond_config, rng, δB_0s)
+    end
+
+    # Initialize
+    a = statekey()
+    visits[a] = get(visits, a, 0) + 1
+    if store_states && !haskey(states, a)
+        states[a] = copy(bond_config.bond)
+    end
+
+    # Main sampling
+    for _ in 1:nsteps
+        mc_step!(bond_config, rng, δB_0s)
+        b = statekey()
+
+        trans[(a, b)] = get(trans, (a, b), 0) + 1
+        visits[b] = get(visits, b, 0) + 1
+
+        if store_states && !haskey(states, b)
+            states[b] = copy(bond_config.bond)
+        end
+
+        a = b
+    end
+
+    # Analyze symmetry on *transition probabilities*:
+    #   pab = N_ab / visits[a]
+    #   pba = N_ba / visits[b]
+    #
+    # Also report a "flux" symmetry check:
+    #   flux_ab = visits[a] * pab = N_ab
+    # so flux symmetry reduces to N_ab ≈ N_ba (but it is noisier / less informative).
+    diffs = Vector{Tuple{Float64, Int, Any, Any, Int, Int, Float64, Float64, Float64}}()
+    # (relprob, total, a, b, nab, nba, pab, pba, flux_rel)
+
+    for ((ka, kb), nab) in trans
+        nba = get(trans, (kb, ka), 0)
+        total = nab + nba
+        total < min_pair_count && continue
+
+        va = get(visits, ka, 0)
+        vb = get(visits, kb, 0)
+        (va == 0 || vb == 0) && continue
+
+        pab = nab / va
+        pba = nba / vb
+
+        denom = pab + pba
+        relprob = denom == 0 ? 0.0 : abs(pab - pba) / denom
+
+        # Optional flux symmetry metric (for uniform π, flux is proportional to N_ab)
+        flux_denom = nab + nba
+        flux_rel = flux_denom == 0 ? 0.0 : abs(nab - nba) / flux_denom
+
+        push!(diffs, (relprob, total, ka, kb, nab, nba, pab, pba, flux_rel))
+    end
+
+    sort!(diffs; by = x -> (x[1], x[2]), rev = true)
+
+    println("Unique states visited:          ", length(visits))
+    println("Unique directed transitions:    ", length(trans))
+    println("Pairs checked (min total = $min_pair_count): ", length(diffs))
+    println()
+    println("Worst detailed-balance violations (probability symmetry):")
+    for i in 1:min(topk, length(diffs))
+        relprob, total, ka, kb, nab, nba, pab, pba, flux_rel = diffs[i]
+        println(rpad("[$i]", 4),
+                " relP=", round(relprob, digits=4),
+                "  pab=", round(pab, digits=6),
+                "  pba=", round(pba, digits=6),
+                "  total=", total,
+                "  N_ab=", nab,
+                "  N_ba=", nba,
+                "  fluxRel=", round(flux_rel, digits=4))
+
+        if store_states
+            bond_a = states[ka]
+            bond_b = states[kb]
+            #println("   a_key=", ka)
+            println("   bond_a=", bond_a)
+            #println("   b_key=", kb)
+            println("   bond_b=", bond_b)
+        end
+    end
+
+    return trans, visits, diffs, states
+end
+
+
+
+# Example usage:
+rng = MersenneTwister(1236)
+trans, visits, diffs, states = test_detailed_balance_uniform!(
+    bond_config, rng;
+    burnin=10_000,
+    nsteps=100_000_000,
+    min_pair_count=50,
+    topk=20,
+    mc_step! = MC_T0_loop!
+)
+
+
+
+function test_detailed_balance_worm!(
+    bond_config,
+    rng::AbstractRNG;
+    burnin::Int = 10_000,
+    nsteps::Int = 200_000,
+    min_pair_count::Int = 50,
+    topk::Int = 20,
+    beta::Float64 = 0.01,
+    store_states::Bool = true,
+)
+    
+    normalization_factor = exp(beta * 32 * N^2) # Precompute normalization factor for acceptance probability
+    # Content-based immutable key (diagnostic-safe; allocates)
+    statekey() = Tuple(bond_config.bond)
+
+    # Directed transition counts: (a,b) -> N_ab
+    trans  = Dict{Tuple{Any,Any}, Int}()
+    visits = Dict{Any, Int}()
+
+    # Optional snapshots for printing
+    states = Dict{Any, Any}()
+
+    # Burn-in
+    for _ in 1:burnin
+        MC_T_worm!(bc, rng, δB_0s, beta, normalization_factor)
+    end
+
+    # Initialize
+    a = statekey()
+    visits[a] = get(visits, a, 0) + 1
+    if store_states && !haskey(states, a)
+        states[a] = copy(bond_config.bond)
+    end
+
+    # Main sampling
+    for _ in 1:nsteps
+        MC_T_worm!(bc, rng, δB_0s, beta, normalization_factor)
+        b = statekey()
+
+        trans[(a, b)] = get(trans, (a, b), 0) + 1
+        visits[b] = get(visits, b, 0) + 1
+
+        if store_states && !haskey(states, b)
+            states[b] = copy(bond_config.bond)
+        end
+
+        a = b
+    end
+
+    # Analyze symmetry on *transition probabilities*:
+    #   pab = N_ab / visits[a]
+    #   pba = N_ba / visits[b]
+    #
+    # Also report a "flux" symmetry check:
+    #   flux_ab = visits[a] * pab = N_ab
+    # so flux symmetry reduces to N_ab ≈ N_ba (but it is noisier / less informative).
+    diffs = Vector{Tuple{Float64, Int, Any, Any, Int, Int, Float64, Float64, Float64}}()
+    # (relprob, total, a, b, nab, nba, pab, pba, flux_rel)
+
+    for ((ka, kb), nab) in trans
+        nba = get(trans, (kb, ka), 0)
+        total = nab + nba
+        total < min_pair_count && continue
+
+        va = get(visits, ka, 0)
+        vb = get(visits, kb, 0)
+        (va == 0 || vb == 0) && continue
+
+        pab = nab / va
+        pba = nba / vb
+
+        denom = pab + pba
+        relprob = denom == 0 ? 0.0 : abs(pab - pba) / denom
+
+        # Optional flux symmetry metric (for uniform π, flux is proportional to N_ab)
+        flux_denom = nab + nba
+        flux_rel = flux_denom == 0 ? 0.0 : abs(nab - nba) / flux_denom
+
+        push!(diffs, (relprob, total, ka, kb, nab, nba, pab, pba, flux_rel))
+    end
+
+    sort!(diffs; by = x -> (x[1], x[2]), rev = true)
+
+    println("Unique states visited:          ", length(visits))
+    println("Unique directed transitions:    ", length(trans))
+    println("Pairs checked (min total = $min_pair_count): ", length(diffs))
+    println()
+    println("Worst detailed-balance violations (probability symmetry):")
+    for i in 1:min(topk, length(diffs))
+        relprob, total, ka, kb, nab, nba, pab, pba, flux_rel = diffs[i]
+        println(rpad("[$i]", 4),
+                " relP=", round(relprob, digits=4),
+                "  pab=", round(pab, digits=6),
+                "  pba=", round(pba, digits=6),
+                "  total=", total,
+                "  N_ab=", nab,
+                "  N_ba=", nba,
+                "  fluxRel=", round(flux_rel, digits=4))
+
+        if store_states
+            bond_a = states[ka]
+            bond_b = states[kb]
+            #println("   a_key=", ka)
+            println("   bond_a=", bond_a)
+            #println("   b_key=", kb)
+            println("   bond_b=", bond_b)
+        end
+    end
+
+    return trans, visits, diffs, states
+end
+
+function test_detailed_balance_loop!(
+    bond_config,
+    rng::AbstractRNG;
+    burnin::Int = 10_000,
+    nsteps::Int = 200_000,
+    min_pair_count::Int = 50,
+    topk::Int = 20,
+    store_states::Bool = true,
+    mc_step! = MC_T0_loop!
+)
+    δB_0s=δB_0_tuple(bond_config)
+    # Content-based immutable key (diagnostic-safe; allocates)
+    statekey() = Tuple(bond_config.bond)
+
+    # Directed transition counts: (a,b) -> N_ab
+    trans  = Dict{Tuple{Any,Any}, Int}()
+    visits = Dict{Any, Int}()
+
+    # Optional snapshots for printing
+    states = Dict{Any, Any}()
+
+    # Burn-in
+    for _ in 1:burnin
+        mc_step!(bond_config, rng,δB_0s)
+    end
+
+    # Initialize
+    a = statekey()
+    visits[a] = get(visits, a, 0) + 1
+    if store_states && !haskey(states, a)
+        states[a] = copy(bond_config.bond)
+    end
+
+    # Main sampling
+    for _ in 1:nsteps
+        mc_step!(bond_config, rng,δB_0s)
+        b = statekey()
+
+        trans[(a, b)] = get(trans, (a, b), 0) + 1
+        visits[b] = get(visits, b, 0) + 1
+
+        if store_states && !haskey(states, b)
+            states[b] = copy(bond_config.bond)
+        end
+
+        a = b
+    end
+
+    # Analyze symmetry on *transition probabilities*:
+    #   pab = N_ab / visits[a]
+    #   pba = N_ba / visits[b]
+    #
+    # Also report a "flux" symmetry check:
+    #   flux_ab = visits[a] * pab = N_ab
+    # so flux symmetry reduces to N_ab ≈ N_ba (but it is noisier / less informative).
+    diffs = Vector{Tuple{Float64, Int, Any, Any, Int, Int, Float64, Float64, Float64}}()
+    # (relprob, total, a, b, nab, nba, pab, pba, flux_rel)
+
+    for ((ka, kb), nab) in trans
+        nba = get(trans, (kb, ka), 0)
+        total = nab + nba
+        total < min_pair_count && continue
+
+        va = get(visits, ka, 0)
+        vb = get(visits, kb, 0)
+        (va == 0 || vb == 0) && continue
+
+        pab = nab / va
+        pba = nba / vb
+
+        denom = pab + pba
+        relprob = denom == 0 ? 0.0 : abs(pab - pba) / denom
+
+        # Optional flux symmetry metric (for uniform π, flux is proportional to N_ab)
+        flux_denom = nab + nba
+        flux_rel = flux_denom == 0 ? 0.0 : abs(nab - nba) / flux_denom
+
+        push!(diffs, (relprob, total, ka, kb, nab, nba, pab, pba, flux_rel))
+    end
+
+    sort!(diffs; by = x -> (x[1], x[2]), rev = true)
+
+    println("Unique states visited:          ", length(visits))
+    println("Unique directed transitions:    ", length(trans))
+    println("Pairs checked (min total = $min_pair_count): ", length(diffs))
+    println()
+    println("Worst detailed-balance violations (probability symmetry):")
+    for i in 1:min(topk, length(diffs))
+        relprob, total, ka, kb, nab, nba, pab, pba, flux_rel = diffs[i]
+        println(rpad("[$i]", 4),
+                " relP=", round(relprob, digits=4),
+                "  pab=", round(pab, digits=6),
+                "  pba=", round(pba, digits=6),
+                "  total=", total,
+                "  N_ab=", nab,
+                "  N_ba=", nba,
+                "  fluxRel=", round(flux_rel, digits=4))
+
+        if store_states
+            bond_a = states[ka]
+            bond_b = states[kb]
+            #println("   a_key=", ka)
+            println("   bond_a=", bond_a)
+            #println("   b_key=", kb)
+            println("   bond_b=", bond_b)
+        end
+    end
+
+    return trans, visits, diffs, states
+end
+
+
+L = 3
+N = 2
+lattice = Lattice(L, L)
+bc = construct_bonds(lattice, N)
+rng = MersenneTwister(1234)
+δB_0s=δB_0_tuple(bc)
+
+# Example usage:
+rng = MersenneTwister(1234)
+trans, visits, diffs, states = test_detailed_balance_loop!(
+    bc, rng;
+    burnin=10_000,
+    nsteps=10_000_000,
+    min_pair_count=50,
+    topk=20,
+    mc_step! = MC_T0_loop!
+)
+
+L = 2
+N = 2
+lattice = Lattice(L, L)
+bc = construct_bonds(lattice, N)
+rng = MersenneTwister(1234)
+
+beta = 0.1
+
+trans, visits, diffs, states = test_detailed_balance_worm!(
+    bc,
+    rng;
+    beta = beta,
+    burnin = 1_00,
+    nsteps = 20_000_000,
+    min_pair_count = 50,
+    topk = 20,
+)
+
+visits
+
+#-------------------------
+# Testing explicit transition probabilities
+#-------------------------
+
+# Pair that violates detailed balance
+#--------------------------
+state_A=[1, -1, 1, 1, 0, 2, -1, -1, -2, 2, 0, 0, -2, 0, 0, 0, 0, 0] #[0, 0, 1, -1, 0, 2, 0, 0, -1, -1, 0, 2, 0, 0, -2, 0, 0, 0]
+state_B=[0, 0, -1, 1, 0, -2, -1, 1, 2, -2, 0, 0, 2, 0, 0, 0, 0, 0]#[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0] #[0, 0, -1, 1, 0, -2, -1, 1, 1, -1, 0, -2, 2, 0, 2, 0, 0, 0]
+# state_A=[0, 0, 1, -1, 0, 2, 1, -1, -1, 1, 0, 2, -2, 0, -2, 0, 0, 0]
+# state_B=[0, 0, 0, 0, 0, 0, -1, 1, -1, -1, 0, -2, 2, 0, 2, 0, 0, 0]
+# Plot them
+bond_config_A=Bonds(lattice, N, copy(state_A), zeros(Int, lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
+p=plot_bondsnv(bond_config_A)
+display(p)
+bond_config_B=Bonds(lattice, N, copy(state_B), zeros(Int, lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
+p=plot_bondsnv(bond_config_B)
+display(p)
+
+
+
+
+
+
+
+
 # Study detailed balance between two states
-state_A = copy(sorted_configs[4][1])
-state_B = [0, 0, 0, 1, -1, 0, 0, 0]
+state_A = #copy(sorted_configs[4][1])
+state_B = #[0, 0, 0, 1, -1, 0, 0, 0]
 
 beta = 0.5
 iterations = 10^6
@@ -356,14 +829,14 @@ function count_AB_transitions(
 
     # ---- (optional) precompute start charges once ----
     qA0 = if precompute_charges
-        tmp = Bonds(lattice, N, copy(fluxA0), zeros(Int, lattice.Lx * lattice.Ly))
+        tmp = Bonds(lattice, N, copy(fluxA0), zeros(Int, lattice.Lx * lattice.Ly), zeros(Int, lattice.Lx * lattice.Ly))
         vertex_charges(tmp)
     else
         nothing
     end
 
     qB0 = if precompute_charges
-        tmp = Bonds(lattice, N, copy(fluxB0), zeros(Int, lattice.Lx * lattice.Ly))
+        tmp = Bonds(lattice, N, copy(fluxB0), zeros(Int, lattice.Lx * lattice.Ly), zeros(Int, lattice.Lx * lattice.Ly))
         vertex_charges(tmp)
     else
         nothing
