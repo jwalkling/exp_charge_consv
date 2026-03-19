@@ -238,6 +238,20 @@ allowed_step_first -> returns integer step or 0 if no step accepted this call
     return 0
 end
 
+#Hard-coded all permutations of 4 numbers
+const PERM4 = (
+    (1,2,3,4), (1,2,4,3), (1,3,2,4), (1,3,4,2), (1,4,2,3), (1,4,3,2),
+    (2,1,3,4), (2,1,4,3), (2,3,1,4), (2,3,4,1), (2,4,1,3), (2,4,3,1),
+    (3,1,2,4), (3,1,4,2), (3,2,1,4), (3,2,4,1), (3,4,1,2), (3,4,2,1),
+    (4,1,2,3), (4,1,3,2), (4,2,1,3), (4,2,3,1), (4,3,1,2), (4,3,2,1),
+)
+
+@inline step_from_idx(k::Int, Lx::Int) =
+    k == 1 ? -1 :
+    k == 2 ?  1 :
+    k == 3 ? -Lx : Lx
+
+
 """
 allowed_step: returns (step, bond_label, δB_curr)
 Backtracking is allowed.
@@ -254,11 +268,11 @@ Backtracking is allowed.
     Δ_prev = index_curr - index_prev
     bonds  = bond_config.bond
 
-    steps = [-1, 1, -Lx, Lx]
-    shuffle!(rng, steps)
+    perm = PERM4[rand(rng, 1:24)]
 
-    @inbounds for step in steps
-        # backtracking allowed
+    @inbounds for k in perm
+        step = step_from_idx(k, Lx)
+
         if step == -Δ_prev
             bond = step_bond(index_curr, step)
             return step, bond, -δB

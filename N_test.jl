@@ -106,11 +106,16 @@ for N in Ns
 end
 display(p)
 #xlims!(p,0, 20)
+Cxx_asymp(r) = r == 0.0 ? NaN : 0.015 * sqrt(r)*exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
+Cxx_asymp2(r) = r == 0.0 ? NaN : 0.001 * sqrt(r)*exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
+rgrid = collect(range(2.0, stop=10, length=400))
+plot!(p, rgrid, log10.(abs.(Cxx_asymp.(rgrid))); lw=2, ls=:dash, color=:violet, label="asymp ∝ sqrt(r)*exp(-r)") #r K₁(r)
+plot!(p, rgrid, log10.(abs.(Cxx_asymp2.(rgrid))); lw=2, ls=:dash, color=:violet, label="asymp ∝ sqrt(r)*exp(-r)")
 finish_plot!(
     p;
     xlabel_str="Δr (bond midpoint grid)",
     ylabel_str="log10 ⟨C(Δr,0)/N^2⟩_bulk",
-    title_str="Bulk Pair-Averaged Correlator vs N (L=20, 10^9 iterations)",
+    title_str="Bulk Pair-Averaged Correlator vs N (L=20, it=10^11)",
     savepath=joinpath(homedir(), "Downloads", plotname * "_general.png"),
 )
 
@@ -134,7 +139,7 @@ for N in Ns
 end
 
 #Cxx_asymp(r) = r == 0.0 ? NaN : 0.004 *sqrt(r)* exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
-Cxx_asymp(r) = r == 0.0 ? NaN : 0.01 * exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
+Cxx_asymp(r) = r == 0.0 ? NaN : 0.01 * sqrt(r)*exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
 rgrid = collect(range(2.0, stop=10, length=400))
 plot!(p, rgrid, log10.(abs.(Cxx_asymp.(rgrid))); lw=2, ls=:dash, label="asymp ∝ exp(-r)") #r K₁(r)
 
@@ -143,7 +148,7 @@ finish_plot!(
     xlabel_str="Δr (bond midpoint grid)",
     ylabel_str="log10 ⟨C(Δr,0)⟩_bulk",
     title_str="⟨C(Δr,0)⟩_bulk in x-direction for A-A sublattices",
-    ylims_tuple=(-6.5, -1.5),
+    ylims_tuple=(-7.5, -1.5),
     savepath=joinpath(homedir(), "Downloads", plotname * "_AA.png"),
 )
 

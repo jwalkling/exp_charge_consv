@@ -662,7 +662,7 @@ trans, visits, diffs, states = test_detailed_balance_loop!(
     mc_step! = MC_T0_loop!
 )
 
-L = 2
+L = 3
 N = 2
 lattice = Lattice(L, L)
 bc = construct_bonds(lattice, N)
@@ -680,7 +680,18 @@ trans, visits, diffs, states = test_detailed_balance_worm!(
     topk = 20,
 )
 
-visits
+using Profile
+
+Profile.clear()
+
+@profile begin
+    for _ in 1:1_000_000
+        MC_T0_loop!(bond_config, rng, δB_0s)
+    end
+end
+
+@btime MC_T0_loop!(bond_config, rng, δB_0s)
+Profile.print()
 
 #-------------------------
 # Testing explicit transition probabilities
