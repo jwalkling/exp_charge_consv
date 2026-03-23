@@ -125,7 +125,7 @@ plot_bondsnv(fix_config)
 L=100 #8 #20 used later
 N=2 #4
 lattice = Lattice(L,L)
-bc = Bonds(lattice, N, zeros(Int, 2*lattice.Lx*lattice.Ly), zeros(Int, lattice.Lx*lattice.Ly))
+bc = construct_bonds(lattice, N) # initialize the bond structure
 rng = MersenneTwister() #Random.default_rng() #MersenneTWister(1235)
 δB_0s=δB_0_tuple(bc)
 
@@ -135,7 +135,7 @@ count=0
 for i in 1:iterations
     LengthLoop=MC_T0_loop_size!(bc, rng, δB_0s)
     #push!(loop_lengths,LengthLoop)
-    if LengthLoop>0
+    if 1000>LengthLoop>0
         push!(loop_lengths,LengthLoop)
         count+=1
     end
@@ -145,9 +145,21 @@ for i in 1:iterations
     end
 end
 
-power=1/4
-p=histogram(loop_lengths.^power, nbins=1000, xlabel="Loop Length", ylabel="Frequency", yscale=:log10, title="Distribution of Loop Lengths")
-xlims!(p,10^power, 20000^power)
+maxL = maximum(loop_lengths)
+loopfreqs=zeros(Int, maxL + 1)
+for i in loop_lengths
+    loopfreqs[i+1] += 1
+end
+
+scatter(log10.(0:maxL), log10.(loopfreqs), xlims=(0,3))
+#power=1/20 #1000
+#.^power
+#p=histogram(log10.(loop_lengths), nbins=100000, xlabel="Loop Length", ylabel="Frequency", yscale=:log10, title="Distribution of Loop Lengths")
+# p=histogram(loop_lengths, nbins=1000, xlabel="Loop Length", ylabel="Frequency", title="Distribution of Loop Lengths",
+#     xlims=(0,100))
+# xlims!(p,0,10^3)
+#xlims!(p,1,4)
+#xlims!(p,10^power, 20000^power)
 
 maxL = maximum(loop_lengths)
 freq = zeros(Int, maxL + 1)

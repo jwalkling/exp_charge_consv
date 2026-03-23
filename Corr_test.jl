@@ -214,9 +214,9 @@ end
 # Import data for larger iterations
 #----------------------------------
 
-Ns = [2,6,10,14,20]
+Ns = [2,10,20]
 Cdict  = Dict{Int, Matrix{Float64}}()
-directory = "../ECC_data/T=0/Bond_C_Ns/it=10^9L=20/"
+directory = "../ECC_data/T=0/Bond_C_Ns/it=10^11L=20/"
 
 for N in Ns
     Cfile  = joinpath(directory, "Cmat_N$(N).csv")
@@ -266,9 +266,9 @@ for bond in same
     push!(Cm,Cbonds[bond])
 end
 p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along -x=y for N=$(N), L=20, it=10^9",
-    xscale=:log10,
+    #xscale=:log10,
     yscale=:log10)
-ylims!(p, 10^(-3), 10^(-1.5))
+ylims!(p, 10^(-6), 10^(-1.5))
 xlabel!(p, "x")
 ylabel!(p, "C(x,-x)")
 display(p)
@@ -288,7 +288,7 @@ end
 p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along -x=y for N=$(N), L=20, it=10^9",
     #xscale=:log10,
     yscale=:log10)
-ylims!(p, 10^(-3.5), 10^(-1.5))
+ylims!(p, 10^(-6), 10^(-1.5))
 xlabel!(p, "x")
 ylabel!(p, "C(x,-x)")
 display(p)
@@ -317,11 +317,12 @@ for bond in same
     push!(rs, bond_distance(lattice, indexc, bond))
     push!(Cm,Cbonds[bond])
 end
-p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along x=y for N=$(N), L=20, it=10^9",
+p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), color=:purple, title="Correlator along x=y for N=$(N), L=20, it=10^9",
+    label="N=2",
     yscale=:log10)
 ylims!(p, 10^(-5), 10^(-1))
-display(p)
-savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))
+#display(p)
+#savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))
 
 
 
@@ -336,8 +337,7 @@ for bond in same
     push!(rs, bond_distance(lattice, indexc, bond))
     push!(Cm,Cbonds[bond])
 end
-p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along x=y for N=$(N), L=20, it=10^9",
-    yscale=:log10)
+scatter!(p,rs,(abs.(Cm)./N^2).+10^(-10), yscale=:log10, color=:lightblue, label="N=20")
 ylims!(p, 10^(-6), 10^(-1))
 display(p)
 savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_N$(N)_diag+.png"))

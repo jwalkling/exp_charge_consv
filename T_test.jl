@@ -8,6 +8,262 @@ using DataFrames
 using CSV
 using Printf
 using Colors
+#-----------------------------------
+# Diagonals for 1D correlators
+#-----------------------------------
+function paired_diagonal_bonds_xym(indexc::Int; max_index::Int)
+    inc=2L-2
+    # paired bond of opposite orientation
+    indexc2 = isodd(indexc) ? indexc + 1 : indexc - 1
+
+    same  = Int[]
+    other = Int[]
+
+    # helper: append current pair if in bounds
+    @inline function maybe_push!(p1::Int, p2::Int)
+        if 1 <= p1 <= max_index && 1 <= p2 <= max_index
+            if p1 != indexc
+                push!(same, p1)
+            end
+            push!(other, p2)
+            return true
+        end
+        return false
+    end
+
+    # negative direction (excluding center to avoid duplicates)
+    p1, p2 = indexc - inc, indexc2 - inc
+    while maybe_push!(p1, p2)
+        p1 -= inc
+        p2 -= inc
+    end
+    
+    maybe_push!(indexc, indexc2)  # include the center bond itself in the "other" list
+
+    # positive direction (excluding center to avoid duplicates)
+    p1, p2 = indexc + inc, indexc2 + inc
+    while maybe_push!(p1, p2)
+        p1 += inc
+        p2 += inc
+    end
+
+    return same, other
+end
+
+
+function paired_bonds(indexc::Int; inc::Int, max_index::Int)
+    same  = Int[]
+
+    # helper: append current pair if in bounds
+    @inline function maybe_push!(p1::Int)
+        if 1 <= p1 <= max_index
+            if p1 != indexc
+                push!(same, p1)
+            end
+            return true
+        end
+        return false
+    end
+
+    # negative direction (excluding center to avoid duplicates)
+    p1 = indexc - inc
+    while maybe_push!(p1)
+        p1 -= inc
+    end
+    
+    maybe_push!(indexc)  # include the center bond itself in the "other" list
+
+    # positive direction (excluding center to avoid duplicates)
+    p1=indexc + inc
+    while maybe_push!(p1)
+        p1 += inc
+    end
+
+    return same #Return bonds of the same kind. Works in general. 
+end
+
+
+#-----------------------------------
+# Bond-Bond Correlator in Real Space
+#-----------------------------------
+
+function plot_bond_corr_realspace(
+    bc::Bonds,
+    b0::Int,
+    meanC::AbstractVector;
+    cmap = :RdBu,
+    lw::Real = 4,
+    clim = nothing,
+    show_ref::Bool = true,
+    shrink::Real = 0.15,                 # new: fraction to cut off each end
+    title::Union{Nothing,String} = nothing,
+)
+    b = bc.bond
+    lat = bc.lattice
+    Lx, Ly = lat.Lx, lat.Ly
+    Nsites = Lx * Ly
+
+    length(meanC) == length(b) || throw(DimensionMismatch("meanC must have length length(bc.bond)"))
+    (1 <= b0 <= length(b)) || throw(ArgumentError("b0 must satisfy 1 ≤ b0 ≤ length(bc.bond)"))
+    (0 ≤ shrink < 0.5) || throw(ArgumentError("shrink must satisfy 0 ≤ shrink < 0.5"))
+
+    @inline site_of_bond(bi::Int) = (bi + 1) >>> 1
+    @inline is_hbond(bi::Int)     = isodd(bi)
+    @inline x_of_site(i::Int)     = ((i - 1) % Lx) + 1
+    @inline y_of_site(i::Int)     = ((i - 1) ÷ Lx) + 1
+
+    # helper: shrink [a,b] toward midpoint by `shrink` on each side
+    @inline function shrink_seg(a::Real, b::Real, s::Real)
+        d = b - a
+        return (a + s*d, b - s*d)
+    end
+
+    xs = Float64[]; ys = Float64[]; zs = Float64[]
+
+    @inbounds for i in 1:Nsites
+        x = x_of_site(i)
+        y = y_of_site(i)
+
+        if x < Lx
+            bi = 2i - 1
+            C  = meanC[bi]
+            x1, x2 = shrink_seg(x, x+1, shrink)
+            append!(xs, (x1, x2, NaN))
+            append!(ys, (y,  y,  NaN))
+            append!(zs, (C,  C,  NaN))
+        end
+
+        if y < Ly
+            bi = 2i
+            C  = meanC[bi]
+            y1, y2 = shrink_seg(y, y+1, shrink)
+            append!(xs, (x,  x,  NaN))
+            append!(ys, (y1, y2, NaN))
+            append!(zs, (C,  C,  NaN))
+        end
+    end
+
+    if clim === nothing
+        m = maximum(abs, meanC)
+        clim = (-m, m)
+    end
+
+    p = plot(xs, ys;
+        seriestype   = :path,
+        line_z       = zs,
+        c            = cmap,
+        clim         = clim,
+        linewidth    = lw,
+        aspect_ratio = :equal,
+        xlabel       = "x",
+        ylabel       = "y",
+        colorbar     = true,
+        legend       = false,
+        title        = title === nothing ? "Bond–bond correlator map, b0=$b0" : title,
+    )
+
+    if show_ref
+        i0 = site_of_bond(b0)
+        x0, y0 = x_of_site(i0), y_of_site(i0)
+
+        if is_hbond(b0)
+            x0 < Lx || throw(ArgumentError("b0=$b0 is a horizontal bond on the right boundary (invalid link)."))
+            x1, x2 = shrink_seg(x0, x0+1, shrink)
+            plot!(p, [x1, x2], [y0, y0]; linewidth=lw+2, color=:black, label="")
+        else
+            y0 < Ly || throw(ArgumentError("b0=$b0 is a vertical bond on the top boundary (invalid link)."))
+            y1, y2 = shrink_seg(y0, y0+1, shrink)
+            plot!(p, [x0, x0], [y1, y2]; linewidth=lw+2, color=:black, label="")
+        end
+    end
+
+    return p
+end
+
+#--------------------------------------
+# Import data and for finite T and plot
+#--------------------------------------
+
+betas = [0.001,0.01,0.1,0.5,1.0,2.0,4.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+ratios = [1000, 100, 100, 100, 100, 10, 1]#[20, 10, 5, 20, 10, 5]
+directory = "../ECC_data/T>0/T_Test/it=10^9L=20/"
+
+Cdict  = Dict{Int, Matrix{Float64}}()
+
+for i in 1:7
+    filename  = joinpath(directory, "Cmat_beta$(betas[i])_ratio$(ratios[i]).csv")
+    dfC = CSV.read(filename, DataFrame)
+    Cmat  = Matrix{Float64}(dfC)
+    Cdict[i]  = Cmat
+end
+
+
+for i in 2:4
+    L=20
+    lattice = Lattice(L,L)
+    indexc=Int((L-1)*L) #Comparison index of the bond
+    bc = construct_bonds(lattice, N)
+
+    Cbonds=Cdict[i][indexc, :]
+    p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cbonds)); clim=(-3,1), shrink=0.3, 
+        title="Bond–bond correlator map for beta=$(betas[i]), L=20, it=10^9")
+    display(p)
+    savefig(p, joinpath(homedir(), "Downloads",  "BC_beta$(betas[i])_L20_it1e9.png"))
+end
+
+#------------------------------
+# 1D correlator plots
+#------------------------------
+# Get the list of bond indices along the -x=y direction for the reference bond at indexc
+L=20
+lattice = Lattice(L,L)
+indexc=Int((L-1)*L)#Int((L-1)*L) #Comparison index of the bond (Int(2L))
+
+#Find the paired vertical/horizontal bond index
+same, other = paired_diagonal_bonds_xym(indexc; max_index=2L*L)
+
+
+i=3
+beta=betas[i]
+bc = construct_bonds(lattice, N)
+
+Cbonds=Cdict[i][indexc, :]
+
+rs=[]
+Cm=[]
+for bond in same
+    push!(rs, bond_distance(lattice, indexc, bond))
+    push!(Cm,Cbonds[bond])
+end
+p = scatter(rs,(abs.(Cm)./N^2).+10^(-10), title="Correlator along -x=y for N=$(N), L=20, it=10^9",
+    #xscale=:log10,
+    yscale=:log10)
+ylims!(p, 10^(-6), 10^(-1.5))
+xlabel!(p, "x")
+ylabel!(p, "C(x,-x)")
+display(p)
+savefig(p, joinpath(homedir(), "Downloads",  "BondCorr_beta$(beta)_diag-.png"))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 function thindata_random_bernoulli(data1, data2, factor; rng=Random.default_rng())

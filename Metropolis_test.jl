@@ -9,14 +9,70 @@ using CSV
 using Printf
 using Colors
 
-betas = [1.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+betas = [0.1]#[1.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
 ratios = [1,10,100,1000] 
-directory = "../ECC_data/T>0/Metro_Test/3x3/maxcutoff,beta=1.0"
+directory = "../ECC_data/T>0/Metro_Test/3x3/maxcutoff,beta=$(betas[1])/"
+
+
+function thindata_random_bernoulli(data1, data2, factor; rng=Random.default_rng())
+    N = length(data1)
+    N == length(data2) || throw(DimensionMismatch("data1 and data2 must have same length"))
+
+    p = 1 / factor
+
+    out1 = Vector{eltype(data1)}()
+    out2 = Vector{eltype(data2)}()
+    sizehint!(out1, max(1, N ÷ factor))
+    sizehint!(out2, max(1, N ÷ factor))
+
+    @inbounds for i in 1:N
+        if rand(rng) < p
+            push!(out1, data1[i])
+            push!(out2, data2[i])
+        end
+    end
+    return out1, out2
+end
+
 
 #Data for just plotting the line Eestimate=E
 reddata=[0,2,6,8,10,16,20]
 
 i=1
+for j in 1:4
+    filename  = joinpath(directory, "metro_data$(betas[i])_$(ratios[j]).csv")
+    df = CSV.read(filename, DataFrame)
+    beta=betas[i]
+    energies = df.energy
+    counts = df.count
+    # factor=10^1
+    # energies,counts = thindata_random_bernoulli(energies, counts,factor)
+
+    p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="-log(p)/beta", legend=false)
+    xlims!(p2,0,10)
+    ylims!(p2,0,10)
+    plot!(p2,reddata,reddata, c=:red, label="E=ΔF line")
+    title!(p2, "E (red) vs. Estimate [beta=$beta for 3x3 w/ ratio=$(ratios[j])]")
+    display(p2)
+end
+
+i=1
+j=3
+filename  = joinpath(directory, "metro_data$(betas[i])_$(ratios[j]).csv")
+df = CSV.read(filename, DataFrame)
+beta=betas[i]
+energies = df.energy
+counts = df.count
+total1=0
+num=0
+for (i,E) in enumerate(energies)
+    if E == 2
+        total1+=counts[i]
+        num+=1
+    end
+end
+println(total1/num)
+
 for j in 3:4
     filename  = joinpath(directory, "metro_data$(betas[i])_$(ratios[j]).csv")
     df = CSV.read(filename, DataFrame)
@@ -48,15 +104,16 @@ ylims!(p2,0,20)
 
 #Study the distribution of states at a given energy
 i=1
-j=4
+j=3
 
-E=5
+
 filename  = joinpath(directory, "metro_data$(betas[i])_$(ratios[j]).csv")
 df = CSV.read(filename, DataFrame)
 beta=betas[i]
 energies = df.energy
 counts = df.count
 
+E=10
 counts_E = []
 
 for k in 1:length(energies)
