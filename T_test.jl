@@ -184,13 +184,13 @@ end
 # Import data and for finite T and plot
 #--------------------------------------
 
-betas = [0.001,0.01,0.1,0.5,1.0,2.0,4.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
-ratios = [1000, 100, 100, 100, 100, 10, 1]#[20, 10, 5, 20, 10, 5]
-directory = "../ECC_data/T>0/T_Test/it=10^9L=20/"
+betas = [0.05,0.08,0.1,0.12,0.2,0.4]#[0.001,0.01,0.1,0.5,1.0,2.0,4.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+ratios = [100,100,100,100,100,100]#[1000, 100, 100, 100, 100, 10, 1]#[20, 10, 5, 20, 10, 5]
+directory = "../ECC_data/T>0/T_Test/it=10^9L=20T2/"
 
 Cdict  = Dict{Int, Matrix{Float64}}()
 
-for i in 1:7
+for i in 1:6
     filename  = joinpath(directory, "Cmat_beta$(betas[i])_ratio$(ratios[i]).csv")
     dfC = CSV.read(filename, DataFrame)
     Cmat  = Matrix{Float64}(dfC)
@@ -198,11 +198,11 @@ for i in 1:7
 end
 
 
-for i in 2:4
+for i in 1:6
     L=20
     lattice = Lattice(L,L)
     indexc=Int((L-1)*L) #Comparison index of the bond
-    bc = construct_bonds(lattice, N)
+    bc = construct_bonds(lattice, 2)
 
     Cbonds=Cdict[i][indexc, :]
     p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cbonds)); clim=(-3,1), shrink=0.3, 
@@ -214,6 +214,56 @@ end
 #------------------------------
 # 1D correlator plots
 #------------------------------
+#Correaltors in the +x direction
+L = 20
+lattice = Lattice(L, L)
+plotname = "ECC_C_T>0"
+shift_max = 25
+
+p = plot(xlabel="r", ylabel="log10 |C(r)|")
+
+for i in 1:6
+    Cmat = Cdict[i]
+    bc   = construct_bonds(lattice, 2)
+
+    rs, Cs = Cbulk_vs_r(Cmat, bc; shift_max=shift_max, shift_min=1)
+    #rs0, Cs0 = Cbulk_vs_r(Cdict[7], bc; shift_max=shift_max, shift_min=1)
+    ys = log10.(abs.((abs.(Cs))))#-log10.(abs.(Cs0) ./ 4)
+    #println(abs.(Cs[6]))
+    plot!(p, rs, ys; marker=:circle, ms=3, label="beta=$(betas[i])")
+end
+display(p)
+
+#Study the behaviour of just beta=0.01
+Cmat = Cdict[2]
+bc   = construct_bonds(lattice, 2)
+rs, Cs = Cbulk_vs_r(Cmat, bc; shift_max=shift_max, shift_min=1)
+Cszeroed=Cs.-mean(Cs[15:end])
+plot(rs, log10.(abs.(Cszeroed)); marker=:circle, ms=3, label="beta=$(betas[2])",
+    xlabel="r", ylabel="log10 |C(r) - C(r→∞)|", 
+    title="Correlator vs r for beta=0.01 (L=20, it=10^9)")
+
+
+
+
+
+
+#xlims!(p,0, 20)
+Cxx_asymp(r) = r == 0.0 ? NaN : 0.015 * sqrt(r)*exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
+Cxx_asymp2(r) = r == 0.0 ? NaN : 0.001 * sqrt(r)*exp(-r) * (1 + 3/(8r) - 15/(2 * (8r)^2))
+rgrid = collect(range(2.0, stop=10, length=400))
+plot!(p, rgrid, log10.(abs.(Cxx_asymp.(rgrid))); lw=2, ls=:dash, color=:violet, label="asymp ∝ sqrt(r)*exp(-r)") #r K₁(r)
+plot!(p, rgrid, log10.(abs.(Cxx_asymp2.(rgrid))); lw=2, ls=:dash, color=:violet, label="asymp ∝ sqrt(r)*exp(-r)")
+finish_plot!(
+    p;
+    xlabel_str="Δr (bond midpoint grid)",
+    ylabel_str="log10 ⟨C(Δr,0)/N^2⟩_bulk",
+    title_str="Bulk Pair-Averaged Correlator vs N (L=20, it=10^11)",
+    savepath=joinpath(homedir(), "Downloads", plotname * "_general.png"),
+)
+
+
+
 # Get the list of bond indices along the -x=y direction for the reference bond at indexc
 L=20
 lattice = Lattice(L,L)
@@ -223,7 +273,7 @@ indexc=Int((L-1)*L)#Int((L-1)*L) #Comparison index of the bond (Int(2L))
 same, other = paired_diagonal_bonds_xym(indexc; max_index=2L*L)
 
 
-i=3
+i=2
 beta=betas[i]
 bc = construct_bonds(lattice, N)
 
@@ -231,7 +281,7 @@ Cbonds=Cdict[i][indexc, :]
 
 rs=[]
 Cm=[]
-for bond in same
+for bond in other
     push!(rs, bond_distance(lattice, indexc, bond))
     push!(Cm,Cbonds[bond])
 end
@@ -511,6 +561,73 @@ for i in 1:1000
     push!(v, allowed_step_first(1.0, bond_config, 5, rng))
 end
 histogram(v, nbins=3, xlabel="Allowed Step", ylabel="Frequency", title="Histogram of Allowed Steps")
+
+
+
+#---------------------------------------
+# Checking infinite temperature beta=0.0
+#---------------------------------------
+
+
+betas = [0.0]#[0.001,0.01,0.1,0.5,1.0,2.0,4.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+ratios = [100]#[1000, 100, 100, 100, 100, 10, 1]#[20, 10, 5, 20, 10, 5]
+directory = "../ECC_data/T>0/T_Test/it=10^9L=20/"
+
+Cdict  = Dict{Int, Matrix{Float64}}()
+
+for i in 1:1
+    filename  = joinpath(directory, "Cmat_beta$(betas[i])_ratio$(ratios[i]).csv")
+    dfC = CSV.read(filename, DataFrame)
+    Cmat  = Matrix{Float64}(dfC)
+    Cdict[i]  = Cmat
+end
+
+
+for i in 1:1
+    L=20
+    lattice = Lattice(L,L)
+    indexc=Int((L-1)*L) #Comparison index of the bond
+    bc = construct_bonds(lattice, 2)
+
+    Cbonds=Cdict[i][indexc, :]
+    p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cbonds)); clim=(-3,1), shrink=0.3, 
+        title="Bond–bond correlator map for beta=$(betas[i]), L=20, it=10^9")
+    display(p)
+    savefig(p, joinpath(homedir(), "Downloads",  "BC_beta$(betas[i])_L20_it1e9.png"))
+end
+
+#Correaltors in the +x direction
+L = 20
+lattice = Lattice(L, L)
+plotname = "ECC_C_T>0"
+shift_max = 25
+
+p = plot(xlabel="r", ylabel="log10 |C(r)|")
+
+for i in 1:1
+    Cmat = Cdict[i]
+    bc   = construct_bonds(lattice, 2)
+
+    rs, Cs = Cbulk_vs_r(Cmat, bc; shift_max=shift_max, shift_min=1)
+    #rs0, Cs0 = Cbulk_vs_r(Cdict[7], bc; shift_max=shift_max, shift_min=1)
+    ys = log10.(abs.((abs.(Cs))))#-log10.(abs.(Cs0) ./ 4)
+    #println(abs.(Cs[6]))
+    plot!(p, rs, ys; marker=:circle, ms=3, label="beta=$(betas[i])")
+end
+display(p)
+
+#Study the behaviour of just beta=0.01
+Cmat = Cdict[2]
+bc   = construct_bonds(lattice, 2)
+rs, Cs = Cbulk_vs_r(Cmat, bc; shift_max=shift_max, shift_min=1)
+Cszeroed=Cs.-mean(Cs[15:end])
+plot(rs, log10.(abs.(Cszeroed)); marker=:circle, ms=3, label="beta=$(betas[2])",
+    xlabel="r", ylabel="log10 |C(r) - C(r→∞)|", 
+    title="Correlator vs r for beta=0.01 (L=20, it=10^9)")
+
+
+
+
 
 
 
@@ -949,6 +1066,15 @@ end
 @btime MC_T0_loop!(bond_config, rng, δB_0s)
 Profile.print()
 
+
+
+
+
+
+
+
+
+
 #-------------------------
 # Testing explicit transition probabilities
 #-------------------------
@@ -1246,3 +1372,248 @@ for beta in betas
     p=histogram(energies, nbins=50, xlabel="Energy Change ΔE", ylabel="Frequency", title="Histogram of Energy Changes at beta=$beta")
     display(p)
 end
+
+
+#--------------------------
+# Testing correlators
+#--------------------------
+
+using LinearAlgebra
+using LinearAlgebra.BLAS
+
+"""
+    bond_corr_matrix_thermal_fast!(
+        bc::Bonds,
+        rng::AbstractRNG,
+        beta::Float64,
+        norm::Float64;
+        burnin::Int = 1_000,
+        nsamples::Int = 2_000,
+        ratio::Int = 100,
+        mc_step! = MC_T_worm!,
+        flip_step! = MC_T_flip!,
+    ) -> Cdisc::Matrix{Float64}, prodmeans::Matrix{Float64}, meanbond::Vector{Float64}, Cconn::Matrix{Float64}
+
+Compute the full bond-bond correlator matrix using Monte Carlo samples.
+
+Returns:
+- `Cdisc[i,j]   = ⟨s_i s_j⟩`
+- `prodmeans[i,j] = ⟨s_i⟩⟨s_j⟩`
+- `meanbond[i]  = ⟨s_i⟩`
+- `Cconn[i,j]   = ⟨s_i s_j⟩ - ⟨s_i⟩⟨s_j⟩`
+
+Notes:
+- This computes the *actual* connected correlator, not the old per-sample centered quantity.
+- Work is still O(nsamples * Nb^2), because the output itself is Nb×Nb.
+- The heavy rank-1 updates are done with BLAS (`syr!`) for speed.
+- `ratio` controls how often you do the worm move; otherwise a flip move is used.
+"""
+function bond_corr_matrix_thermal_fast!(
+    bc::Bonds,
+    rng::AbstractRNG,
+    beta::Float64,
+    norm::Float64;
+    burnin::Int = 1_000,
+    nsamples::Int = 2_000,
+    ratio::Int = 100,
+    mc_step! = MC_T_worm!,
+    flip_step! = MC_T_flip!,
+)
+    b = bc.bond
+    Nb = length(b)
+
+    δB_0s = δB_0_tuple(bc)
+
+    # Burn-in
+    @inbounds for _ in 1:burnin
+        mc_step!(bc, rng, δB_0s, beta, norm)
+    end
+
+    # Accumulators
+    S = zeros(Float64, Nb, Nb)      # upper triangle accumulates sum_s v v^T
+    sumv = zeros(Float64, Nb)       # sum_s v
+    v = Vector{Float64}(undef, Nb)  # current sample as Float64
+
+    inv_nsamples = 1.0 / nsamples
+
+    @inbounds for s in 1:nsamples
+        if (s % ratio) == 0
+            mc_step!(bc, rng, δB_0s, beta, norm)
+        else
+            flip_step!(bc, rng, beta)
+        end
+
+        # Copy current bond configuration into a Float64 work vector
+        @simd for i in 1:Nb
+            v[i] = Float64(b[i])
+        end
+
+        # sumv += v
+        @simd for i in 1:Nb
+            sumv[i] += v[i]
+        end
+
+        # S += v*v'   (upper triangle only)
+        BLAS.syr!('U', 1.0, v, S)
+    end
+
+    # Convert sums to means
+    @inbounds @simd for i in 1:Nb
+        sumv[i] *= inv_nsamples
+    end
+    S .*= inv_nsamples
+
+    # Mirror upper triangle -> full symmetric matrix
+    @inbounds for j in 1:Nb
+        for i in 1:j-1
+            S[j, i] = S[i, j]
+        end
+    end
+
+    meanbond = sumv
+    Cdisc = S
+
+    # prodmeans = meanbond * meanbond'
+    prodmeans = meanbond * transpose(meanbond)
+
+    # Actual connected correlator
+    Cconn = Cdisc .- prodmeans
+
+    return Cdisc, prodmeans, meanbond, Cconn
+end
+
+"""
+    bond_corr_matrix_thermal!(
+        bc::Bonds,
+        rng::AbstractRNG;
+        connected::Bool = false,
+        burnin::Int = 1_000,
+        nsamples::Int = 2_000,
+        mc_step! = MC_T0_loop!,
+    ) -> meanC::Matrix{Float64}, Cstderr::Matrix{Float64}
+
+Compute the full bond–bond correlator matrix
+
+    C[b1, b2] = ⟨ s[b1] s[b2] ⟩                    (connected=false)
+    C[b1, b2] = ⟨ (s[b1]-μ)(s[b2]-μ) ⟩            (connected=true)
+
+where μ = average bond value in the *current* configuration (per sample),
+matching your existing estimator logic.
+
+Returns:
+- `meanC`: Nb×Nb matrix of correlator means
+- `Cstderr`: Nb×Nb matrix of standard errors (NaN if nsamples ≤ 1)
+
+Notes:
+- This is O(Nb^2) memory and O(nsamples * Nb^2) work. For large lattices, this will be heavy.
+- Uses only the upper triangle during accumulation, then mirrors to enforce symmetry.
+"""
+function bond_corr_matrix_thermal_old!(
+    bc::Bonds,
+    rng::AbstractRNG,
+    beta::Float64,
+    norm::Float64;
+    connected::Bool = false,
+    burnin::Int = 1_000,
+    nsamples::Int = 2_000,
+    mc_step! = MC_T_worm!,
+)
+    b = bc.bond
+    Nb = length(b)
+
+    ratio=100
+    δB_0s = δB_0_tuple(bc)
+
+    @inbounds for _ in 1:burnin
+        mc_step!(bc, rng, δB_0s, beta, norm)
+    end
+
+    meanC = zeros(Float64, Nb, Nb)  # store full for convenience; update only upper triangle
+
+    # work buffer for centered/un-centered bond values
+    v = Vector{Float64}(undef, Nb)
+
+    @inbounds for s in 1:nsamples
+        if s%ratio == 0 #Once every 100 moves, try a loop move.
+            mc_step!(bc, rng, δB_0s, beta, norm)
+        else
+            MC_T_flip!(bc, rng, beta)
+        end
+#         for _ in 1:thin
+#             mc_step!(bc, rng, δB_0s, beta, norm)
+#         end
+
+        if connected
+            μ = sum(b) / Nb
+            @inbounds for i in 1:Nb
+                v[i] = b[i] - μ
+            end
+        else
+            @inbounds for i in 1:Nb
+                v[i] = b[i]
+            end
+        end
+
+        # Welford update, upper triangle only (symmetry)
+        @inbounds for j in 1:Nb
+            vj = v[j]
+            for i in 1:j
+                Cij = v[i] * vj
+                δ   = Cij - meanC[i, j]
+                meanC[i, j] += δ / s
+            end
+        end
+    end
+
+
+    # mirror to lower triangle (enforce exact symmetry)
+    @inbounds for j in 1:Nb
+        for i in 1:j-1
+            meanC[j, i]   = meanC[i, j]
+        end
+    end
+
+    return meanC
+end
+
+
+# Example usage:
+L = 20
+N = 2
+lattice = Lattice(L, L)
+bc = construct_bonds(lattice, N)
+rng = MersenneTwister()
+beta = 2.0
+norm = exp(beta * 32 * N^2)
+t1=time()
+Cdisc, prodmeans, meanbond, Cconn = bond_corr_matrix_thermal_fast!(
+    bc, rng, beta, norm;
+    burnin = 10_000,
+    nsamples = 1_000_000,
+    ratio = 100,
+    mc_step! = MC_T_worm!,
+    flip_step! = MC_T_flip!,
+)
+t2=time()
+
+Cmat = bond_corr_matrix_thermal_old!(
+    bc, rng, beta, norm;
+    connected = true,
+    burnin = 10_000,
+    nsamples = 1_000_000,
+    mc_step! = MC_T_worm!,
+)
+t3=time()
+println("Fast method time: ", t2 - t1, " seconds")
+println("Old method time: ", t3 - t2, " seconds")
+
+
+
+
+indexc=Int((L-1)*L) #Comparison index of the bond
+bc = construct_bonds(lattice, 2)
+
+Cbonds=Cdisc[indexc, :]
+p = plot_bond_corr_realspace(bc, indexc, log10.(abs.(Cbonds)); clim=(-3,1), shrink=0.1, 
+    title="Bond–bond correlator map for beta=$(beta), L=20, it=10^9")
+display(p)

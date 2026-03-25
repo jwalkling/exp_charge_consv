@@ -9,7 +9,7 @@ using CSV
 using Printf
 using Colors
 
-betas = [0.1]#[1.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
+betas = [0.01]#[1.0]#[0.5, 1.0, 2.0, 0.75, 1.5, 3.0]
 ratios = [1,10,100,1000] 
 directory = "../ECC_data/T>0/Metro_Test/3x3/maxcutoff,beta=$(betas[1])/"
 
@@ -39,25 +39,25 @@ end
 reddata=[0,2,6,8,10,16,20]
 
 i=1
-for j in 1:4
+for j in 4:4
     filename  = joinpath(directory, "metro_data$(betas[i])_$(ratios[j]).csv")
     df = CSV.read(filename, DataFrame)
     beta=betas[i]
     energies = df.energy
     counts = df.count
-    # factor=10^1
-    # energies,counts = thindata_random_bernoulli(energies, counts,factor)
+    factor=10^2
+    energies,counts = thindata_random_bernoulli(energies, counts,factor)
 
     p2=scatter(energies, -log.(counts/maximum(counts))/beta, markersize=4, markerstrokewidth=0, c=:grays, xlabel="Energy", ylabel="-log(p)/beta", legend=false)
-    xlims!(p2,0,10)
-    ylims!(p2,0,10)
+    xlims!(p2,0,100)
+    ylims!(p2,0,100)
     plot!(p2,reddata,reddata, c=:red, label="E=ΔF line")
     title!(p2, "E (red) vs. Estimate [beta=$beta for 3x3 w/ ratio=$(ratios[j])]")
     display(p2)
 end
 
 i=1
-j=3
+j=2
 filename  = joinpath(directory, "metro_data$(betas[i])_$(ratios[j]).csv")
 df = CSV.read(filename, DataFrame)
 beta=betas[i]
